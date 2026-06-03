@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "backend-agentic-marketplace",
+  "version": "0.1.0",
+  "description": "Agentic backend-engineering plugins for Claude Code. Plugin #1: explorer (explore-once, understand-forever codebase memory). Slots reserved for builder, reviewer, and ops plugins.",
+  "owner": {
+    "name": "hafizmirhamza276-lab",
+    "email": "hafizmirhamza276@gmail.com",
+    "url": "https://github.com/hafizmirhamza276-lab"
+  },
+  "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "license": "MIT",
+  "plugins": [
+    {
+      "name": "explorer",
+      "source": "./plugins/explorer",
+      "description": "Explore a backend codebase ONCE with breadth+depth sub-agents, then write a durable .claude/explorer/ memory so any future session understands the code (what / why / how) without re-exploring.",
+      "version": "0.1.0",
+      "category": "code-understanding",
+      "author": { "name": "hafizmirhamza276-lab" }
+    }
+  ]
+}
