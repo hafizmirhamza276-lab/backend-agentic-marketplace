@@ -24,10 +24,12 @@ git push -u origin main
 ```
 
 ### 3. Run it
+```bash
 /explorer:start            # explore once → writes .claude/explorer/ memory
 /explorer:start src/auth   # focus a specific module/path
 
 Local testing without GitHub: claude --plugin-dir ./plugins/explorer
+```
 
 ```
 Next session, just open the repo: a SessionStart notice points Claude to the memory, and it
