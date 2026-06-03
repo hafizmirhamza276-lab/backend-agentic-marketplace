@@ -18,9 +18,10 @@ git push -u origin main
 ```
 
 ### 2. Add the marketplace and install the plugin in Claude Code
-
+```bash
 /plugin marketplace add hafizmirhamza276-lab/backend-agentic-marketplace
 /plugin install explorer@backend-agentic-marketplace
+```
 
 ### 3. Run it
 /explorer:start            # explore once → writes .claude/explorer/ memory
