@@ -6,6 +6,7 @@ A Claude Code plugin marketplace for agentic backend engineering.
 it (what / why / how) by reading `.claude/explorer/` — no re-exploring.
 
 ## Install
+1. Push this folder to your GitHub repo
 ```bash
 cd backend-agentic-marketplace
 git init
@@ -16,12 +17,17 @@ git remote add origin https://github.com/hafizmirhamza276-lab/backend-agentic-ma
 git push -u origin main
 ```
 
-### 2. Add plugin to the marketplace and install the plugin
+### 2. Add the marketplace and install the plugin in Claude Code
 
-## Use
-```
+/plugin marketplace add hafizmirhamza276-lab/backend-agentic-marketplace
+/plugin install explorer@backend-agentic-marketplace
+
+### 3. Run it
 /explorer:start            # explore once → writes .claude/explorer/ memory
-/explorer:start src/auth   # focus a path/module
+/explorer:start src/auth   # focus a specific module/path
+
+Local testing without GitHub: claude --plugin-dir ./plugins/explorer
+
 ```
 Next session, just open the repo: a SessionStart notice points Claude to the memory, and it
 recalls instead of re-scanning. Commit `.claude/explorer/` so your whole team inherits it.
