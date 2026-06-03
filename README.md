@@ -6,15 +6,17 @@ A Claude Code plugin marketplace for agentic backend engineering.
 it (what / why / how) by reading `.claude/explorer/` — no re-exploring.
 
 ## Install
-1. Push this folder to a GitHub repo (e.g. `YOUR_GITHUB/backend-agentic-marketplace`) and
-   edit the `owner`/`repository`/`YOUR_NAME` placeholders in
-   `.claude-plugin/marketplace.json` and `plugins/explorer/.claude-plugin/plugin.json`.
-2. In Claude Code:
-   ```
-   /plugin marketplace add YOUR_GITHUB/backend-agentic-marketplace
-   /plugin install explorer@backend-agentic-marketplace
-   ```
-   (Local testing without GitHub: `claude --plugin-dir ./plugins/explorer`.)
+```bash
+cd backend-agentic-marketplace
+git init
+git add .
+git commit -m "explorer plugin + marketplace"
+git branch -M main
+git remote add origin https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace.git
+git push -u origin main
+```
+
+### 2. Add plugin to the marketplace and install the plugin
 
 ## Use
 ```
