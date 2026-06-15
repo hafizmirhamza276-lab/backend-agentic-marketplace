@@ -81,10 +81,16 @@ handling is not enumerated — it is a TODO in disguise.
 ```
 ### Task <id> — <short intent>
 - Files/functions: <exact repo-relative paths / symbols this unit touches>
+- Existing pattern: <the established pattern this follows + callers of any changed symbol>
 - Behavior: <precise input → output; the ONE thing this unit does>
 - Edge cases:
   - <case> → <intended handling>          (≥1 bullet; name any MEMORY.md risks you pulled in)
 - Definition of Done: <observable, testable completion — includes the edge coverage, not just "compiles">
 ```
-Keep ids stable and short (`1`, `2`, … or `1.1`) so the coverage map and QA can refer back to
-them. When `micro_decomposition` is off, skip the breakdown and use the single-pass flow.
+`Files/functions`, `Existing pattern`, and `Behavior` are doctrine; the deterministic gate
+(`validate-plan.sh`) enforces only the non-empty `Edge cases:` list and the `Definition of Done:`.
+**Explore before writing a task:** recall existing patterns, then grep ALL callers of any symbol
+you'll change — so each unit follows convention and accounts for its blast radius (no duplicate
+implementations, no broken callers). Keep ids stable and short (`1`, `2`, … or `1.1`) so the
+coverage map and QA can refer back to them. When `micro_decomposition` is off, skip the breakdown
+and use the single-pass flow.

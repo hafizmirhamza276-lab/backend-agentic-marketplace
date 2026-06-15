@@ -23,6 +23,18 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/lint-feedback.sh",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [

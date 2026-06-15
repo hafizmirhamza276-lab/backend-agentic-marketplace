@@ -78,6 +78,15 @@ bd_enforce() {
   return 1
 }
 
+# Per-edit lint/type feedback loop enforce (independent of enforce_gates):
+# BUILDER_ENFORCE=1 or settings.feedback_enforce=true makes the Stop gate refuse to
+# pass while edited files still carry unaddressed lint/type findings.
+bd_feedback_enforce() {
+  [ "${BUILDER_ENFORCE:-}" = "1" ] && return 0
+  [ "$(bd_setting feedback_enforce false)" = "true" ] && return 0
+  return 1
+}
+
 # --- hook stdin parsing ------------------------------------------------------
 # Reads the hook JSON payload (passed on stdin) once into BD_HOOK_JSON. Skips the
 # read when stdin is a terminal (manual run / misconfig) so it can never block on a

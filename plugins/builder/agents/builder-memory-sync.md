@@ -12,7 +12,7 @@ Follow the method in the `sync-memory` skill (`${CLAUDE_PLUGIN_ROOT}/skills/sync
 
 1. From `.claude/builder/CHANGELOG.md`, identify exactly which files were added/modified/removed.
 2. Update only the affected memory:
-   - `.claude/explorer/index.json` — entries for changed files (`path`, `summary`, `symbols`, `depends_on`, `area`, `status`).
+   - `.claude/explorer/index.json` — entries for changed files (`path`, `summary`, `symbols`, `imports`, `depends_on`, `used_by`, `area`, `status`). Keep them recall-ready: refresh `summary`/`symbols` and, where cheap, `imports`/`used_by` (callers) so hybrid retrieval (index → grep → read) stays accurate.
    - `.claude/explorer/MEMORY.md` — sections whose behavior/why/interface/convention/risk changed.
    - `.claude/explorer/map/<area>.md` — the affected area deep-dives.
    - `.claude/explorer/TRACK.md` — move changed files to Done; add a changelog line.

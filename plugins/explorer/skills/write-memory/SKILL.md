@@ -59,16 +59,33 @@ explored_commit: <sha>   last_run: <ISO8601>   coverage: <NN>%
 - <date> <sha> — <what this run added/refreshed>
 ```
 
-## File: index.json  (machine-readable, for targeted recall)
+## File: index.json  (machine-readable, for targeted **semantic-ish** recall)
+Enrich each file entry so recall can be targeted by MEANING (what a thing does + how it
+connects), not just by filename — this is the index half of the hybrid retrieval chain
+(index → grep → targeted read). `summary` and `symbols` are required; `imports` and
+`used_by` (callers) are recorded **where cheap to derive** (a file's own import block is
+cheap; a full caller graph is not — sample it, don't chase every reference). `symbols` may be
+bare names or `{ "name", "summary" }` objects when a per-symbol one-liner adds recall value.
 ```json
 {
   "explored_commit": "<sha>",
   "files": [
-    { "path": "src/...", "summary": "<one line>", "symbols": ["fn/class names"], "depends_on": ["path"], "area": "<area>", "status": "read|sampled" }
+    {
+      "path": "src/...",
+      "summary": "<one line: what this file is for>",
+      "symbols": ["fnA", { "name": "ClassB", "summary": "<what it does, one line>" }],
+      "imports": ["<modules/paths this file imports>"],
+      "depends_on": ["path"],
+      "used_by": ["<files/symbols that call into this one — callers, where cheap>"],
+      "area": "<area>",
+      "status": "read|sampled"
+    }
   ],
   "areas": { "<area>": "map/<area>.md" }
 }
 ```
+Older entries with only `path/summary/symbols/depends_on/area/status` stay valid — the new
+fields are additive (consumers, incl. `verify-build.sh`'s path check, only require `path`).
 
 ## Folder: map/<area>.md  (one deep-dive per major module)
 A focused write-up per area so a future agent reads only what it needs. Same evidence-first

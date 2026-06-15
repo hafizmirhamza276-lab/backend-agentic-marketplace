@@ -1,5 +1,29 @@
 # Changelog — builder
 
+## 0.3.0 — harness reliability (Cursor-style closed loops)
+- **Per-edit feedback loop** — new `scripts/lint-feedback.sh`, wired as a PostToolUse hook
+  (`Write|Edit|MultiEdit|NotebookEdit`, timeout 20s). After each edit it re-checks ONLY the
+  changed file with the auto-detected, installed toolchain (ESLint/tsc/Prettier · Ruff/flake8/
+  mypy/black · gofmt/go vet/golangci-lint · rustfmt/cargo · pre-commit fallback), and feeds
+  concise diagnostics back via the PostToolUse `hookSpecificOutput.additionalContext` channel.
+  Multi-ecosystem + graceful (only runs installed tools), per-file (fast), output-capped, per-tool
+  `timeout`. Skips `.claude/*`, lockfiles, and non-code files. Advisory by default; under
+  `feedback_enforce`/`BUILDER_ENFORCE` it records findings the Stop gate (`verify-build.sh`)
+  refuses to pass with. New `bd_feedback_enforce` helper in `lib/common.sh`.
+- **Per-task targeted tests** — after a micro-task, the orchestrator/QA runs tests scoped to the
+  touched files/symbols (not the whole suite), gated by `feedback_run_tests` (default `"ask"`),
+  folded into the task's edge-case coverage map.
+- **Hybrid retrieval chain** — `index.json` enriched (per-file/-symbol summaries + `imports` +
+  `used_by` callers, additive/back-compatible); context-finder + recall-memory now recall by
+  meaning → grep concrete symbols → read precise ranges, returning summaries not dumps.
+- **Explore before change** — plan-change/apply-change require locating existing patterns + ALL
+  callers of a changed symbol before writing; recorded per task as `Existing pattern:`.
+- **Always-on standards + cheap static context** — implementer always honors MEMORY.md
+  conventions/invariants; SessionStart prints OS, git branch + clean/dirty, and recently-changed
+  files to stdout. Feedback records are cleared at SessionStart (per-session lint debt).
+- New settings (bootstrap defaults): `feedback_loop` (true), `feedback_enforce` (false),
+  `feedback_run_tests` ("ask").
+
 ## 0.2.0 — micro-level precision
 - New mode (default on) that decomposes a requirement into the smallest
   independently-verifiable tasks and writes precise, edge-case-hardened code — solving the

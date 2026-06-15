@@ -26,10 +26,32 @@ if [ ! -f "$SETTINGS" ]; then
   "enforce_gates": false,
   "auto_run_tests": "ask",
   "micro_decomposition": true,
-  "require_edge_case_coverage": true
+  "require_edge_case_coverage": true,
+  "feedback_loop": true,
+  "feedback_enforce": false,
+  "feedback_run_tests": "ask"
 }
 JSON
   bd_tell "initialized .claude/builder/settings.json (edit to tune gates / cost)"
+fi
+
+# Fresh slate for the per-edit feedback loop: lint debt is tracked within a session
+# (records accrue from this session's edits), so clear last session's records.
+rm -rf "$BUILDER_DIR/feedback" 2>/dev/null || true
+
+# Cheap static context (Cursor "always" grounding) -> STDOUT so the orchestrator
+# starts grounded without spending a turn re-deriving it.
+PROJECT="$(bd_project_dir)"
+OS_NAME="$(uname -s 2>/dev/null || printf '%s' "${OSTYPE:-unknown}")"
+if bd_have git && git -C "$PROJECT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  BR="$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf '?')"
+  DIRTY="$(git -C "$PROJECT" status --porcelain 2>/dev/null | grep -c . || true)"
+  if [ "${DIRTY:-0}" -gt 0 ]; then STATE="dirty (${DIRTY} change(s))"; else STATE="clean"; fi
+  bd_tell "context: OS=${OS_NAME} · branch=${BR} · working tree ${STATE}"
+  CHANGED="$(git -C "$PROJECT" diff --name-only HEAD 2>/dev/null | head -n 8 | tr '\n' ' ' || true)"
+  [ -n "$CHANGED" ] && bd_tell "recently changed: ${CHANGED}"
+else
+  bd_tell "context: OS=${OS_NAME} · not a git work tree"
 fi
 
 # 2) explorer memory dependency

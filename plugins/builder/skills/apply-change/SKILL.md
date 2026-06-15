@@ -7,6 +7,18 @@ description: "Implement an APPROVED plan (.claude/builder/PLAN.md) exactly as wr
 
 You implement; you do not re-plan and you do not expand scope.
 
+## Always-on standards (non-negotiable, load these FIRST — Cursor "Always" rules)
+Before touching code, load a short **standards block** and keep it in view for every edit —
+these are not optional and they override your own stylistic instincts:
+- **MEMORY.md "Conventions to follow"** — the codebase's actual naming, error-handling,
+  logging, config, data-access, and layering patterns. Mirror them; do not introduce a new style.
+- **MEMORY.md "Risk map & gotchas" invariants** — the assumptions that must hold; the
+  "if you change X, watch Y" notes. Preserve every one that touches your change.
+- **`.claude/builder/STANDARDS.md`** if it exists (project-specific coding standards).
+- The **per-edit feedback loop** (PostToolUse `lint-feedback.sh`) re-checks each file you
+  write and feeds lint/type errors back as `additionalContext`. Treat that feedback as part
+  of the standards: **fix what it surfaces before moving on** — don't accumulate lint debt.
+
 ## Preconditions (assume the orchestrator checked, but verify)
 - `.claude/builder/PLAN.md` exists and is the approved plan.
 - The change matches the plan's Goal and the spec. If reality contradicts the
@@ -15,7 +27,7 @@ You implement; you do not re-plan and you do not expand scope.
 
 ## Rules
 1. **Scope is law.** Edit only files in the plan's `## Scope` list. The PreToolUse guard blocks the rest; if you hit a real need to touch something new, stop and ask the orchestrator to amend the plan + re-confirm with the user.
-2. **Match the codebase.** Follow the conventions in MEMORY.md (naming, error-handling style, data-access pattern, layering). Do not introduce a new style. Mirror neighboring code.
+2. **Match the codebase (explore before change).** Before writing or altering code, locate the existing pattern for what you're adding and grep for **all callers/usages** of any symbol you change (start from the task's `Existing pattern:` line + MEMORY.md, then ripgrep concrete symbols). Follow the established pattern — never invent a parallel one — and update/verify every caller a change affects. Mirror neighboring code; do not introduce a new style.
 3. **Minimal, reviewable diffs.** Smallest change that satisfies the spec. No drive-by refactors, no reformatting unrelated lines, no "while I'm here" extras — not 1% beyond the spec.
 4. **Preserve invariants.** Honor every invariant the plan listed from MEMORY.md's risk map.
 5. **Tests.** If the plan's test strategy names existing tests or a harness, add/adjust tests alongside the change. (Running them is QA's job — see qa-verify.)

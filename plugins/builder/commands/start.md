@@ -17,9 +17,14 @@ Read the live config from `.claude/builder/settings.json` (the SessionStart hook
 created it): `clarity_threshold` (9), `rating_threshold` (9),
 `max_planner_loops` (2), `max_qa_loops` (2), `opus_escalation` (true),
 `auto_run_tests` ("ask"), `micro_decomposition` (true), `require_edge_case_coverage`
-(true). The last two drive **micro-level precision mode**: the plan is decomposed
-into atomic, edge-case-hardened tasks and implemented task-by-task. When
-`micro_decomposition` is off, the flow falls back to the single-pass plan/implement.
+(true), `feedback_loop` (true), `feedback_enforce` (false), `feedback_run_tests`
+("ask"). `micro_decomposition` + `require_edge_case_coverage` drive **micro-level
+precision mode** (plan decomposed into atomic, edge-case-hardened tasks, implemented
+task-by-task). `feedback_loop` drives the **per-edit lint/type feedback loop** (the
+PostToolUse `lint-feedback.sh` hook surfaces diagnostics after each edit); under
+`feedback_enforce` the Stop gate won't pass with unaddressed findings.
+`feedback_run_tests` gates the per-task targeted tests. When `micro_decomposition`
+is off, the flow falls back to single-pass plan/implement.
 
 ---
 
@@ -52,9 +57,11 @@ into atomic, edge-case-hardened tasks and implemented task-by-task. When
 11. **Micro-level precision (when `micro_decomposition` is on — default):** work the `## Tasks` list **one task at a time** (or a small batch of tightly-related tasks). For each, dispatch **builder-implementer** with ONLY that task's block (intent, Files/functions, Behavior, Edge cases, Definition of Done) plus the named MEMORY.md risks — keeping each dispatch's context small **by design**, which is what stops edge cases from slipping. The implementer writes code that handles every enumerated edge case (fail-closed where a check can't decide), self-verifies against the DoD, appends that task's **edge-case coverage map** to `.claude/builder/CHANGELOG.md` (each case → `handled at file:line` | `covered by <test>` | `DEFERRED:<reason>`), and returns a ≤10-line summary. **Close it before starting the next task** — never hold multiple tasks' detail in your own context.
     **Single-pass (when `micro_decomposition` is off):** dispatch **builder-implementer** once with the whole approved plan.
     Either way: edits stay in-scope (the PreToolUse scope guard hard-blocks the rest); if the implementer reports the plan no longer matches reality, return to Phase 3.
+    **Per-edit feedback (automatic):** the PostToolUse `lint-feedback.sh` hook re-checks each written file with the installed toolchain and feeds concise lint/type diagnostics back to the implementer as context — the implementer fixes them before continuing (Cursor-style closed loop). Nothing for you to run; just don't accept a task as done while its feedback is unaddressed.
+11a. **Per-task targeted tests (gated by `feedback_run_tests`, default `"ask"`).** After a task's edits, run tests **scoped to that task's touched files/symbols only** — never the whole suite (proportional). Auto-detect the harness, then per `feedback_run_tests`: `"ask"` → propose the exact narrow command(s) (e.g. `pytest tests/test_order.py::test_discount`, `vitest run src/order.test.ts`, `go test ./order/...`) and **get the user's confirmation before running** (tests are side-effectful); `"never"` → skip and note it; `"auto"` → run the detected targeted command directly. Hand the results to QA so they land in the task's edge-case coverage map.
 
 ## Phase 6 — QA + gate (loop, then escalate)
-12. Dispatch **builder-qa**. For execution it follows `auto_run_tests`: on `"ask"` it proposes the exact test/build commands — **you confirm with the user before any run** (running tests is side-effectful). **When `require_edge_case_coverage` is on (default),** QA also verifies the **edge-case coverage map** in CHANGELOG.md: every enumerated case from the plan's `## Tasks` is handled at a real `file:line`, covered by a named test, or justifiably `DEFERRED:` — it flags any that are neither, and any plan case missing from the map (a silent skip), and proposes targeted tests for the highest-risk cases (boundaries, fail-closed paths, named MEMORY.md risks) under `auto_run_tests`. Its score must reflect edge-case coverage, not just a green build. It writes `.claude/builder/QA.md` and returns mode + score /10.
+12. Dispatch **builder-qa**. For execution it follows `auto_run_tests`: on `"ask"` it proposes the exact test/build commands — **you confirm with the user before any run** (running tests is side-effectful). **When `require_edge_case_coverage` is on (default),** QA also verifies the **edge-case coverage map** in CHANGELOG.md: every enumerated case from the plan's `## Tasks` is handled at a real `file:line`, covered by a named test, or justifiably `DEFERRED:` — it flags any that are neither, and any plan case missing from the map (a silent skip), and proposes targeted tests for the highest-risk cases (boundaries, fail-closed paths, named MEMORY.md risks) under `auto_run_tests`. Its score must reflect edge-case coverage, not just a green build. QA also **folds the per-task targeted-test results** (from step 11a) into each task's coverage map — a passing targeted test becomes the `covered by <test>` evidence for the edge cases it exercises. It writes `.claude/builder/QA.md` and returns mode + score /10.
 13. Rate QA yourself. If < `rating_threshold`, return precise gaps to **builder-qa** and loop (max `max_qa_loops`). If still short and `opus_escalation` is true, dispatch **builder-qa-deep** (Opus) once. If escalation is off and loops are exhausted, report the residual risk to the user honestly rather than claiming success.
 
 ## Phase 7 — Sync the durable memory

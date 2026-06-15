@@ -21,6 +21,27 @@ note() { printf '  - %s\n' "$*" >&2; ((problems++)) || true; }
 
 # Only act when builder has actually been engaged this session.
 [ -d "$(bd_builder_dir)" ] || exit 0
+
+# Per-edit feedback loop, ENFORCE mode: refuse to finish while files edited this
+# session still carry unaddressed lint/type findings (lint-feedback.sh records them
+# under .claude/builder/feedback/; a clean re-edit clears its record). Independent of
+# enforce_gates and of whether a PLAN exists, so it can't be skipped. Advisory mode
+# (default) writes no records, so this block is a no-op then.
+if bd_feedback_enforce; then
+  FEEDBACK_DIR="$(bd_builder_dir)/feedback"
+  if [ -d "$FEEDBACK_DIR" ]; then
+    outstanding=0
+    for rec in "$FEEDBACK_DIR"/*.txt; do
+      [ -e "$rec" ] || continue
+      [ -s "$rec" ] && outstanding=$((outstanding + 1))
+    done
+    if [ "$outstanding" -gt 0 ]; then
+      printf '[builder] build verification BLOCKED: %s file(s) have unaddressed lint/type findings from the per-edit feedback loop (see .claude/builder/feedback/). Fix them, or unset feedback_enforce.\n' "$outstanding" >&2
+      exit 2
+    fi
+  fi
+fi
+
 [ -f "$PLAN" ] || exit 0
 
 [ -f "$PLAN" ] || note "no .claude/builder/PLAN.md — record the plan you implemented"

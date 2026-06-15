@@ -36,6 +36,13 @@ Read `auto_run_tests` from `.claude/builder/settings.json`:
 - `"never"`: do not execute; go straight to static mode.
 - `"auto"`: you may run detected, read-only test/build commands directly.
 
+**Targeted first (per-task), then broad.** Prefer tests **scoped to the touched files/symbols**
+of each micro-task — a single test file, a test id, or a package path — not the whole suite on
+every loop (proportional; this mirrors the per-task tests the orchestrator runs in Phase 5 under
+`feedback_run_tests`). Fold each task's targeted result into that task's coverage map: a passing
+targeted test is the `covered by <test>` evidence for the edge cases it exercises. Run the broad
+app-level regression once, after the targeted checks, to catch neighboring breakage.
+
 **If a harness exists and running is allowed/confirmed** → run it:
 - **Feature-level:** exercise the new behavior across normal, boundary, and failure inputs; null/empty, large values, concurrency if relevant, auth/permission paths, error handling. Capture pass/fail.
 - **App-level (regression):** run the broader suite / start the app's smoke path to check the change didn't break neighboring features. Note anything red.

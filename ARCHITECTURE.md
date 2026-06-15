@@ -94,6 +94,33 @@ QA ───────► verifies the coverage map — every enumerated case 
   gate sits under the orchestrator's 9+/10 judgment — same philosophy as the rest of the
   system: gates for what must be true, LLM judgment on top.
 
+### Harness reliability (Cursor-style closed loops)
+On top of decomposition, the builder borrows reliability techniques from agentic coding
+harnesses — all multi-ecosystem and graceful (only what's installed runs):
+
+```
+edit a file ─► PostToolUse lint-feedback.sh ─► auto-detect toolchain by ext + root markers
+ │                                              run per-FILE checks (only installed tools)
+ │                                              concise diagnostics ─► additionalContext ─► agent fixes next step
+ ▼                                              (advisory; feedback_enforce ⇒ Stop gate blocks unaddressed findings)
+per micro-task ─► targeted tests (touched files/symbols only, gated by feedback_run_tests) ─► coverage map
+recall  ─► index.json by MEANING (summary/symbols/imports/callers) → grep concrete symbols → read precise ranges
+```
+
+- **Per-edit feedback loop** — `lint-feedback.sh` (PostToolUse, `Write|Edit|MultiEdit|NotebookEdit`)
+  re-checks only the changed file and feeds lint/type errors back through the documented
+  PostToolUse `hookSpecificOutput.additionalContext` channel (advisory, exit 0). It skips
+  `.claude/*`, lockfiles, and non-code files; caps output; per-tool `timeout`. Under enforce it
+  records findings the Stop gate refuses to pass with.
+- **Hybrid retrieval** — index (semantic-ish) → grep (concrete symbols) → targeted reads; return
+  summaries, not file dumps. Pure search runs at the low-effort tier.
+- **Explore before change** — locate existing patterns + ALL callers of a changed symbol first;
+  follow conventions (recorded per task as `Existing pattern:`) so a change doesn't duplicate
+  code or break callers.
+- **Always-on standards + cheap static context** — MEMORY.md conventions/invariants are
+  non-negotiable for the implementer; SessionStart prints OS, git branch + dirty/clean, and
+  recently-changed files so the orchestrator starts grounded.
+
 ## Roadmap slots (the other 3–4 plugins)
 The marketplace is ready to hold siblings that all read the same memory:
 - `builder` — implements changes using the explorer memory as ground truth.

@@ -99,13 +99,21 @@ To turn those two into hard blocks, set:
 
 or export `BUILDER_ENFORCE=1` for a single session.
 
-Two more settings drive **micro-level precision mode** (both default `true`):
+More settings drive **micro-level precision mode** (both default `true`) and the
+**harness reliability** features:
 
 ```json
-{ "micro_decomposition": true, "require_edge_case_coverage": true }
+{
+  "micro_decomposition": true,
+  "require_edge_case_coverage": true,
+  "feedback_loop": true,
+  "feedback_enforce": false,
+  "feedback_run_tests": "ask"
+}
 ```
 
-Set `micro_decomposition` to `false` to fall back to the original single-pass plan/implement.
+Set `micro_decomposition` to `false` to fall back to the original single-pass plan/implement;
+set `feedback_loop` to `false` to silence the per-edit lint/type loop.
 
 ### Micro-level precision mode
 
@@ -129,6 +137,32 @@ a boundary case slip.
   `covered by <test>` | `DEFERRED:<reason>` — no silent skips), QA verifies it, and the
   deterministic gate `validate-plan.sh` rejects a plan whose tasks lack edge cases or a DoD,
   naming the exact offending task.
+
+### Harness reliability (Cursor-style techniques)
+
+Borrowed from agentic coding harnesses to raise accuracy and leave fewer leftover bugs:
+
+- **Per-edit closed feedback loop.** A PostToolUse hook (`lint-feedback.sh`) re-checks **only the
+  file just edited** with whatever toolchain is installed — auto-detected by extension + project
+  markers (ESLint/tsc/Prettier, Ruff/flake8/mypy/black, gofmt/go vet/golangci-lint,
+  rustfmt/cargo, or a project's pre-commit). It feeds **concise** diagnostics back to the agent via
+  the PostToolUse `additionalContext` channel so they're fixed on the next step. Multi-ecosystem and
+  graceful: it only runs tools that are present, prefers fast per-file checks, caps output, and
+  skips `.claude/*`, lockfiles, and non-code files. Advisory by default; under `feedback_enforce`
+  the Stop gate (`verify-build.sh`) won't pass while edited files still have unaddressed findings.
+- **Per-task targeted tests.** After each micro-task, the orchestrator/QA can run tests **scoped to
+  the touched files/symbols** (not the whole suite), gated by `feedback_run_tests` (default `"ask"`
+  — proposes exact commands, you confirm). Results fold into the task's edge-case coverage map.
+- **Hybrid retrieval chain.** Recall the explorer `index.json` by **meaning** (per-file/-symbol
+  summaries + imports + callers) → narrow with grep/ripgrep on concrete symbols → read only the
+  precise ranges. Index + grep, never whole-file dumps.
+- **Explore before change.** Before writing code, the agent locates the existing pattern and **all
+  callers** of any symbol it will change, and follows established conventions instead of inventing
+  new ones — recorded per task as `Existing pattern:`.
+- **Always-on standards + cheap static context.** The implementer always honors the MEMORY.md
+  conventions/invariants as non-negotiable standards, and the SessionStart hook prints cheap
+  grounding (OS, git branch + clean/dirty, recently-changed files) so the orchestrator starts
+  oriented.
 
 ## How it works
 

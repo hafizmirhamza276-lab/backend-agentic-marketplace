@@ -58,6 +58,7 @@ gate `validate-plan.sh` parses it):
 
 ### Task 1 — <short intent>
 - Files/functions: <exact repo-relative paths / symbols this unit touches>
+- Existing pattern: <the established pattern/file this follows + the callers of any symbol it changes — see "Explore before change" below>
 - Behavior: <precise input → output; the ONE thing this unit does>
 - Edge cases:
   - <case> → <intended handling>     (≥1; pull in the relevant MEMORY.md risks by name)
@@ -78,6 +79,17 @@ app-level regression matters). Names the existing harness if one exists.
 Anything still uncertain. If this list is non-trivial, clarity was over-rated —
 drop the score and return to Step 1.
 ```
+
+## Explore before change (prevents duplicates & convention breaks)
+Before you write a task, **find what already exists** — recall from MEMORY.md/index.json first,
+then narrow with grep/ripgrep on concrete symbols:
+- Locate the **existing pattern** for what you're about to add (how similar things are done here).
+  Plan to follow it, not invent a parallel one. Record it in the task's `Existing pattern:` line.
+- For any symbol a task will **change**, find **ALL its callers/usages** and list the ones that
+  could break under `Existing pattern:` (or in Risks). A change that ignores its callers is how
+  "small mistake, whole-codebase damage" happens.
+This is cheap search — it can run at the low-effort tier (see the context-finder / recall-memory
+retrieval doctrine). Return summaries, not raw file dumps.
 
 ## Honesty rules
 - Never claim certainty you can't cite. "100% understood" is not allowed; state coverage and assumptions.

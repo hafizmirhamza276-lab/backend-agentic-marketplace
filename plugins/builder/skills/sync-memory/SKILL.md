@@ -9,7 +9,7 @@ Keep the "brain" current so future work recalls correct facts. Touch only what
 the change affected — do not rewrite the whole memory.
 
 ## What to update
-1. **`.claude/explorer/index.json`** — for each file the change added/modified/removed, update or add its entry (`path`, `summary`, `symbols`, `depends_on`, `area`, `status`). Set `status` to `Done` only for files you actually changed and understand; keep others as the explorer left them.
+1. **`.claude/explorer/index.json`** — for each file the change added/modified/removed, update or add its entry (`path`, `summary`, `symbols`, `imports`, `depends_on`, `used_by`, `area`, `status`). Keep the entry **recall-ready**: refresh `summary`/`symbols` so a future session can find it by meaning, and update `imports`/`used_by` (callers) **where cheap** — if your change added or removed a caller of a changed symbol, reflect it so the hybrid retrieval chain stays accurate. `symbols` may be bare names or `{ "name", "summary" }`. Set `status` to `Done` only for files you actually changed and understand; keep others as the explorer left them.
 2. **`.claude/explorer/MEMORY.md`** — if the change altered how something works, why, an interface, a convention, or a risk, edit the relevant section. Bump nothing you didn't verify. If the working tree advanced, update `explored_commit` in the frontmatter to the new `git HEAD` **only for the areas you re-touched**; otherwise leave it and note partial freshness in TRACK.md.
 3. **`.claude/explorer/map/<area>.md`** — update the deep-dive for any area whose behavior changed.
 4. **`.claude/explorer/TRACK.md`** — move changed files to Done; add a changelog line (what changed, by which spec).
