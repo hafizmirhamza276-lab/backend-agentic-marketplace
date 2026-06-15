@@ -5,6 +5,10 @@
 .ai/
 # Claude Code per-user local settings (never shared).
 .claude/settings.local.json
+# Builder runtime/session state (settings.json, PLAN/BUG/QA, feedback/ + bugfix/
+# ledgers) is regenerated per session by the builder hooks — it is local working
+# state, never part of the marketplace source. Keep it out of the repo.
+.claude/builder/
 
 # Keep the durable explorer codebase memory committable — it IS meant to be
 # checked in per the explorer plugin design. Do NOT ignore it.
