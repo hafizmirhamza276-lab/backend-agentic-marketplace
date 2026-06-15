@@ -11,5 +11,6 @@
   "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "license": "MIT",
-  "keywords": ["spec-driven", "agentic", "implementation", "backend", "codebase-memory", "qa"]
+  "keywords": ["spec-driven", "agentic", "implementation", "backend", "codebase-memory", "qa"],
+  "hooks": "./hooks/hooks.json"
 }
