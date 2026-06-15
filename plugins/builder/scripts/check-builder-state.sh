@@ -29,7 +29,12 @@ if [ ! -f "$SETTINGS" ]; then
   "require_edge_case_coverage": true,
   "feedback_loop": true,
   "feedback_enforce": false,
-  "feedback_run_tests": "ask"
+  "feedback_run_tests": "ask",
+  "bugfix_mode": "auto",
+  "require_reproduction": true,
+  "require_characterization": true,
+  "bugfix_enforce": false,
+  "bugfix_diagnosis_tier": "critical"
 }
 JSON
   bd_tell "initialized .claude/builder/settings.json (edit to tune gates / cost)"
@@ -73,5 +78,10 @@ fi
 bd_tell "builder ready. RECALL .claude/explorer/* via the context-finder sub-agent — do not re-scan the codebase."
 if [ -f "$(bd_plan)" ]; then
   bd_tell "an in-progress plan exists at .claude/builder/PLAN.md — review it before starting new work."
+fi
+# Bug-fix mode: a lingering Bug Brief means reproduce-first may gate source edits
+# (guard-bugfix.sh). Surface it so a stale Brief from a finished/abandoned bug is noticed.
+if [ -f "$(bd_bug)" ]; then
+  bd_tell "a Bug Brief exists at .claude/builder/BUG.md — BUG-FIX MODE is engaged (reproduce-first guard active). Resume the fix, or remove BUG.md if you're not fixing a bug."
 fi
 exit 0

@@ -23,8 +23,8 @@
     {
       "name": "builder",
       "source": "./plugins/builder",
-      "description": "Spec-driven agentic implementation for Claude Code. Reads explorer codebase memory as ground truth, plans a requested change with clarity + technical-plan gates (9/10 required), implements only what the spec says, runs hybrid QA, and keeps the durable memory in sync.",
-      "version": "0.1.0",
+      "description": "Spec-driven agentic implementation for Claude Code. Reads explorer codebase memory as ground truth, plans a requested change with clarity + technical-plan gates (9/10 required), implements only what the spec says, runs hybrid QA, and keeps the durable memory in sync. Includes a reproduce-first BUG-FIX MODE (failing reproduction + characterization tests + deterministic regression gate) for vague, repro-less bug reports.",
+      "version": "0.4.0",
       "category": "code-implementation",
       "author": { "name": "hafizmirhamza276-lab" }
     }

@@ -121,6 +121,51 @@ recall  ─► index.json by MEANING (summary/symbols/imports/callers) → grep 
   non-negotiable for the implementer; SessionStart prints OS, git branch + dirty/clean, and
   recently-changed files so the orchestrator starts grounded.
 
+### Bug-fix mode (reproduce-first → regression-safe)
+When a spec is a **bug report** (auto-detected by a `Bug:`/symptom shape, or marked by the user;
+`bugfix_mode: "auto"|"on"|"off"`), `/builder:start` runs a dedicated workflow instead of the plain
+feature flow. **The fix's accuracy is designed to come from a verification net, not from effort:**
+the deep tier improves *diagnosis*; the gates prove *correctness and no-regression*.
+
+```
+symptom (vague, repro-less)
+   │
+[B0] intake ─► Bug Brief → .claude/builder/BUG.md (symptom, parent-AC = expected behavior + source,
+   │           MISSING-INFO, regression boundary from linked tests, memory-recalled hypotheses)
+   ▼
+[B1] reproduce-first ─► a FAILING repro test (red on current code)        ── enforced by ──┐
+   │                    "ideally a test that asserts expected behavior"                     │
+   ▼                                                                       guard-bugfix.sh  │
+[B2] root-cause (CRITICAL tier: Opus 4.8 @ effort xhigh, builder-diagnostician)  (PreToolUse): │
+   │   trace reproduced failure → TRUE root cause (all callers, MEMORY.md invariants)  blocks  │
+   ▼   — symptom-patching is a defect                                       source edits until │
+[B3] characterization tests ─► pin CURRENT correct behavior of the blast    a repro test exists ┘
+   │   radius (green pre-fix, must stay green post-fix)
+   ▼
+[B4] minimal scoped fix ─► micro-decompose (atomic, fail-closed) + scope guard + per-edit feedback
+   ▼
+[B5] regression-gate.sh (Stop): repro RED→GREEN ✓ AND characterization/linked GREEN ✓
+   │   (advisory; bugfix_enforce / BUILDER_ENFORCE ⇒ hard-block exit 2). Separate from verify-build.sh.
+   ▼
+[B6] honest residual report (red→green proof, regression results, RESIDUAL-RISK, confidence ≠ 100%)
+     + memory-sync records the bug+fix into the risk map
+```
+
+- **Reproduce-first is the cornerstone and it's deterministic.** `guard-bugfix.sh` (a *separate*
+  PreToolUse hook from `guard-scope.sh`, so the scope contract and its F2/F3 fixes are untouched)
+  blocks **source** edits while a Bug Brief exists and no repro test is on disk; test files and
+  `.claude/*` stay writable so the net can be built. Outside a bug-fix session it's a pure no-op.
+- **Reuse, not duplication.** The fix is planned in the same `PLAN.md`, gated by the same
+  `validate-plan.sh`, scoped by the same scope guard, implemented by the same `builder-implementer`
+  with the per-edit feedback loop, and QA'd by the same `builder-qa`. The only new pieces are the
+  diagnosis tier (`builder-diagnostician`, the critical tier of the dynamic-effort router) and the
+  two new scripts. Gate decisions are pure shell/awk — no python dependency — so they're robust on
+  python-less / Windows-stub hosts (the class of failure the audit flagged).
+- **Data contract.** Test commands live in BUG.md (fixed schema); statuses are recorded to the
+  ledger `.claude/builder/bugfix/results.txt` (`kind  status  command`) after confirmed runs, or
+  produced by the gate itself when `auto_run_tests="auto"`. Running tests is side-effectful, so the
+  orchestrator proposes commands and confirms before any run.
+
 ## Roadmap slots (the other 3–4 plugins)
 The marketplace is ready to hold siblings that all read the same memory:
 - `builder` — implements changes using the explorer memory as ground truth.

@@ -12,6 +12,11 @@ bd_specs_dir()    { printf '%s/specs'    "$(bd_claude_dir)"; }
 bd_settings()     { printf '%s/settings.json' "$(bd_builder_dir)"; }
 bd_plan()         { printf '%s/PLAN.md'    "$(bd_builder_dir)"; }
 bd_changelog()    { printf '%s/CHANGELOG.md' "$(bd_builder_dir)"; }
+# Bug-fix mode artifacts. BUG.md is the persistent "Bug Brief" (like PLAN.md, it
+# survives across sessions until the bug is done); the bugfix/ dir holds per-bug
+# gate state (the run-results ledger, the reproduce-first override marker).
+bd_bug()          { printf '%s/BUG.md'   "$(bd_builder_dir)"; }
+bd_bugfix_dir()   { printf '%s/bugfix'   "$(bd_builder_dir)"; }
 
 # --- environment probes ------------------------------------------------------
 bd_have() { command -v "$1" >/dev/null 2>&1; }
@@ -84,6 +89,16 @@ bd_enforce() {
 bd_feedback_enforce() {
   [ "${BUILDER_ENFORCE:-}" = "1" ] && return 0
   [ "$(bd_setting feedback_enforce false)" = "true" ] && return 0
+  return 1
+}
+
+# Bug-fix regression gate enforce (independent of enforce_gates; mirrors
+# bd_feedback_enforce): BUILDER_ENFORCE=1 or settings.bugfix_enforce=true makes the
+# Stop-time regression gate hard-block (exit 2) when the repro isn't green or a
+# characterization test regressed. Advisory (warn only) otherwise.
+bd_bugfix_enforce() {
+  [ "${BUILDER_ENFORCE:-}" = "1" ] && return 0
+  [ "$(bd_setting bugfix_enforce false)" = "true" ] && return 0
   return 1
 }
 

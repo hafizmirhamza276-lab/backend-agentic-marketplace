@@ -26,6 +26,11 @@ PostToolUse `lint-feedback.sh` hook surfaces diagnostics after each edit); under
 `feedback_run_tests` gates the per-task targeted tests. When `micro_decomposition`
 is off, the flow falls back to single-pass plan/implement.
 
+Also read the **bug-fix** settings: `bugfix_mode` ("auto" — detect a bug report; "on"; "off"),
+`require_reproduction` (true), `require_characterization` (true), `bugfix_enforce` (false),
+`bugfix_diagnosis_tier` ("critical"). When a spec is a bug report (see Phase 2a) and
+`bugfix_mode` ≠ "off", run **BUG-FIX MODE** (Phase B-*) instead of the plain feature flow.
+
 ---
 
 ## Phase 0 — Preconditions
@@ -38,6 +43,28 @@ is off, the flow falls back to single-pass plan/implement.
 3. Check `.claude/specs/` for `specN.md` files. If none exist, prompt the user:
    *"Put your requirements in `.claude/specs/spec1.md` (spec2.md, …). Keep each spec as simple as possible; if it's complex, add detail so the change lands in exactly the right place."* Wait.
 4. Once specs exist, restate the contract and get **explicit permission** to start: *builder implements only what the specs say — code may be created, edited, or deleted as the specs require, but nothing 1% beyond them.*
+
+## Phase 2a — Bug-fix detection (route the spec)
+4a. Read `bugfix_mode`. If `"off"`, skip to Phase 3 (plain feature flow). Otherwise classify the spec: it is a **bug report** when `bugfix_mode` is `"on"`, OR (`"auto"`) when the spec has a bug/symptom shape — a leading `Bug:` marker, a `## Symptom`/`Symptom:` line, frontmatter `type: bug`, or "not working / broken / error / regression / unexpected" wording rather than build-a-feature intent — OR the user marked it a bug. If it's a bug report, run **BUG-FIX MODE** below (it reuses the same gates) instead of Phases 3–6, then resume at Phase 7. If it's an ordinary feature spec, continue to Phase 3.
+
+---
+
+## BUG-FIX MODE (B0–B6) — reproduce-first, regression-safe
+Engaged when Phase 2a classifies the spec as a bug. **Core principle:** the fix's accuracy comes from the **verification net** (a failing reproduction + characterization tests + the regression gate), NOT from thinking budget — effort only sharpens diagnosis. Follow the `diagnose-bug` skill (`${CLAUDE_PLUGIN_ROOT}/skills/diagnose-bug/SKILL.md`). Be **proportional**: a tiny, well-specified bug skips heavy ceremony, but reproduce-first + regression-gate still apply.
+
+B-i. **Diagnose (critical tier, B0–B3 + fix plan).** When `bugfix_diagnosis_tier` is `"critical"` (default), dispatch **builder-diagnostician** (Opus 4.8, effort xhigh) with the context brief + spec paths. It writes the **Bug Brief** to `.claude/builder/BUG.md` (symptom; candidate interpretations; expected behavior + its SOURCE citing the parent AC; an explicit **MISSING-INFO** list; the regression boundary from linked tests; root-cause hypotheses from explorer memory), captures a **FAILING reproduction test** (B1), traces the **TRUE root cause** with `path:line` (B2), writes **characterization tests** pinning the blast radius (B3), and drafts the fix `PLAN.md` (Scope = source + test files; `## Tasks` with edge cases + DoD). It returns a ≤12-line brief. (For any work-item connector available — e.g. Azure Boards — it pulls parent AC + linked tests + attachment by ID; else those must be in the spec.)
+   - **Reproduce-first is enforced deterministically:** while BUG.md exists and `require_reproduction` is true, `guard-bugfix.sh` blocks source edits until the repro test exists. If the bug **can't** be reproduced from available info, surface the MISSING-INFO to the **user** via the clarity gate and **STOP**, OR present a constructed most-likely repro and get explicit user **confirmation** — only then write `.claude/builder/bugfix/repro.confirmed`. **Never blind-fix a guess.**
+   - **Confirm before running tests.** Per `auto_run_tests`/`feedback_run_tests`, propose the exact repro command and **confirm with the user before running** it; record the RED result.
+B-ii. **Gate the fix plan (same gate).** Rate the fix `PLAN.md` yourself (root cause addressed, not the symptom; respects MEMORY.md invariants; tasks proportional with edge cases + DoD) and run `validate-plan.sh`. Approved only if your rating ≥ `rating_threshold` AND the gate passes. Loop/escalate exactly as Phase 3 steps 8–9.
+B-iii. **Confirm before code (same as Phase 4).** Show Goal (the bug), Scope file list, and side-effects; get explicit go-ahead. The scope guard hard-blocks edits outside Scope.
+B-iv. **Implement the minimal fix (B4, reuse Phase 5).** Dispatch **builder-implementer** task-by-task on the fix `## Tasks` (fail-closed default; per-edit feedback loop applies). The repro test now exists, so `guard-bugfix.sh` permits the in-scope source edits.
+B-v. **Run + record the net.** Per `auto_run_tests` (propose + confirm; tests are side-effectful), run the repro (must now be **GREEN**), the characterization tests, and the named linked/affected tests (must stay **GREEN**). Record each result to `.claude/builder/bugfix/results.txt` as `kind  status  command` (`kind ∈ {repro,char,linked}`, `status ∈ {green,red}`) and update BUG.md's `Repro status:` to GREEN.
+B-vi. **Regression gate (B5, deterministic).** The Stop hook `regression-gate.sh` then verifies repro red→green + characterization/linked green from that ledger (or runs the commands itself when `auto_run_tests="auto"`). Advisory by default; under `bugfix_enforce`/`BUILDER_ENFORCE` it hard-blocks until the net is satisfied. Treat a non-green gate as not-done.
+B-vii. **QA (reuse Phase 6).** Dispatch **builder-qa** to fold the repro + characterization results into the coverage map and check the broader regression surface, then resume the normal flow at **Phase 7** (memory-sync) and **Phase 8** with the **honest residual report** below.
+
+**B6 — honest residual report (fold into Phase 8 for bugs).** State: bug fixed with the repro **red→green** proof; which regression tests passed; an explicit **RESIDUAL-RISK** section (untested paths the fix touches; integration/runtime/concurrency cases not exercised; memory blind spots); and a confidence statement (**never "100%"**). After the user accepts the fix, clear the bug-fix state (remove `.claude/builder/BUG.md` and `.claude/builder/bugfix/`) so a stale Brief doesn't gate future work; memory-sync (Phase 7) records the bug + fix into the risk map.
+
+---
 
 ## Phase 3 — Plan + gate (loop, then escalate)
 5. Dispatch **builder-planner** with the context brief + the spec paths. It returns a clarity score and (if clear) writes `.claude/builder/PLAN.md`. **When `micro_decomposition` is on (default),** the plan also carries a `## Tasks` breakdown — atomic, independently-verifiable units, each with an explicit `Edge cases:` list (taxonomy + named MEMORY.md risks) and a `Definition of Done`. The planner must be **proportional**: a one-line change is ONE task, no over-splitting.

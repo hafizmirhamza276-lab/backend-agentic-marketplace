@@ -7,7 +7,8 @@ it (what / why / how) by reading `.claude/explorer/` — no re-exploring.
 
 **Plugin #2 — `builder`:** spec-driven implementation that reads the explorer memory as
 ground truth, gates the plan (clarity + technical plan, 9/10 each), implements only what the
-spec says, runs hybrid QA, and keeps the durable memory in sync.
+spec says, runs hybrid QA, and keeps the durable memory in sync — plus a reproduce-first
+**bug-fix mode** that turns vague, repro-less bug reports into verified, regression-safe fixes.
 
 ## How to install
 
@@ -108,12 +109,21 @@ More settings drive **micro-level precision mode** (both default `true`) and the
   "require_edge_case_coverage": true,
   "feedback_loop": true,
   "feedback_enforce": false,
-  "feedback_run_tests": "ask"
+  "feedback_run_tests": "ask",
+  "bugfix_mode": "auto",
+  "require_reproduction": true,
+  "require_characterization": true,
+  "bugfix_enforce": false,
+  "bugfix_diagnosis_tier": "critical"
 }
 ```
 
 Set `micro_decomposition` to `false` to fall back to the original single-pass plan/implement;
-set `feedback_loop` to `false` to silence the per-edit lint/type loop.
+set `feedback_loop` to `false` to silence the per-edit lint/type loop. The `bugfix_*` keys drive
+**bug-fix mode** (below): `bugfix_mode` (`"auto"` detects a bug report · `"on"` · `"off"`),
+`require_reproduction` (reproduce-first guard), `require_characterization`, `bugfix_enforce`
+(make the regression gate hard-block), and `bugfix_diagnosis_tier` (`"critical"` → Opus 4.8 at
+effort xhigh for diagnosis).
 
 ### Micro-level precision mode
 
@@ -163,6 +173,49 @@ Borrowed from agentic coding harnesses to raise accuracy and leave fewer leftove
   conventions/invariants as non-negotiable standards, and the SessionStart hook prints cheap
   grounding (OS, git branch + clean/dirty, recently-changed files) so the orchestrator starts
   oriented.
+
+### Bug-fix mode (reproduce-first → regression-safe)
+
+Vague, repro-less bug reports ("the search field is not working", empty repro steps) are where a
+"fix" both misses the real defect and breaks a neighbor. Bug-fix mode turns them into **verified,
+regression-safe** fixes through a deterministic
+**symptom → reproduce → root-cause → characterize → fix → regression-gate** workflow. It engages
+automatically when a spec looks like a bug report (`bugfix_mode: "auto"`), or on demand
+(`"on"`); `"off"` disables it.
+
+**The principle is encoded, not just advised: the fix's accuracy comes from a verification net,
+not from thinking budget.** Effort sharpens the *diagnosis*; the gates prove *correctness*.
+
+- **Symptom intake (B0).** Ingest the full context — the symptom, the **parent story's
+  acceptance criteria** (the de-facto spec of correct behavior), the **linked tests** (the
+  regression boundary), and attachments — and write a structured **Bug Brief** to
+  `.claude/builder/BUG.md` with candidate interpretations and an explicit **MISSING-INFO** list
+  (it flags where expected behavior isn't specified instead of inventing it). If a work-item
+  connector (e.g. Azure Boards) is available it pulls the parent AC + linked tests by ID; else
+  they're required in the spec.
+- **Reproduce-first (B1) — the cornerstone, enforced.** No source edit until the symptom is a
+  **deterministic failing reproduction** (ideally a test that fails on the current code). The
+  PreToolUse `guard-bugfix.sh` hook **blocks source edits** while no repro test exists (test files
+  and `.claude/*` stay writable). If it can't be reproduced, the missing info is surfaced and the
+  flow **stops for the reporter** — or a constructed repro is used only after explicit user
+  confirmation. Never a blind guess.
+- **Root cause at the critical tier (B2).** Diagnosis routes to **Opus 4.8 at effort xhigh** (the
+  `builder-diagnostician` agent) to trace from the reproduced failure to the **true root cause**
+  (all callers, MEMORY.md invariants), not the symptom — symptom-patching is treated as a defect.
+- **Characterization before the fix (B3).** Tests that pin the **current correct behavior** of the
+  blast radius are written first; they're green pre-fix and must stay green post-fix.
+- **Minimal scoped fix (B4).** The smallest root-cause fix, via micro-decompose (atomic tasks +
+  edge cases, fail-closed default), the scope guard, and the per-edit feedback loop.
+- **Regression gate (B5) — deterministic.** `regression-gate.sh` (Stop hook) proves the repro went
+  **red→green** AND the characterization/linked tests stayed **green**. Advisory by default;
+  hard-blocks under `bugfix_enforce`/`BUILDER_ENFORCE`. It's a separate script — it doesn't touch
+  `verify-build.sh`.
+- **Honest residual report (B6).** Reports the red→green proof, what regression tests passed, and an
+  explicit **residual-risk** section with a confidence statement (never "100%"); memory-sync records
+  the bug + fix into the durable risk map so it's known next time.
+
+Proportional by design: a tiny, well-specified bug skips the ceremony — but reproduce-first and the
+regression gate still apply (they're cheap and they're the whole point).
 
 ## How it works
 

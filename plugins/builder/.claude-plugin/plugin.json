@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "builder",
   "displayName": "Builder",
-  "version": "0.3.0",
-  "description": "Spec-driven agentic implementation for Claude Code. Reads the explorer codebase memory as ground truth, plans a requested change with clarity + technical-plan gates, decomposes it into atomic edge-case-hardened tasks (micro-level precision), implements only what the spec says with a per-edit lint/type feedback loop and hybrid retrieval, runs hybrid QA, and keeps the durable memory in sync.",
+  "version": "0.4.0",
+  "description": "Spec-driven agentic implementation for Claude Code. Reads the explorer codebase memory as ground truth, plans a requested change with clarity + technical-plan gates, decomposes it into atomic edge-case-hardened tasks (micro-level precision), implements only what the spec says with a per-edit lint/type feedback loop and hybrid retrieval, runs hybrid QA, and keeps the durable memory in sync. Includes a reproduce-first BUG-FIX MODE that turns vague, repro-less bug reports into verified, regression-safe fixes via a failing reproduction + characterization tests + a deterministic regression gate.",
   "author": {
     "name": "hafizmirhamza276-lab",
     "email": "hafizmirhamza276@gmail.com"
@@ -11,6 +11,6 @@
   "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "license": "MIT",
-  "keywords": ["spec-driven", "agentic", "implementation", "backend", "codebase-memory", "qa", "edge-cases", "decomposition"],
+  "keywords": ["spec-driven", "agentic", "implementation", "backend", "codebase-memory", "qa", "edge-cases", "decomposition", "bug-fix", "reproduce-first", "regression-gate"],
   "hooks": "./hooks/hooks.json"
 }

@@ -1,5 +1,39 @@
 # Changelog — builder
 
+## 0.4.0 — bug-fix mode (reproduce-first + characterization + regression gate)
+- **New BUG-FIX MODE** — a deterministic symptom→reproduce→root-cause→characterize→fix→
+  regression-gate workflow that turns vague, repro-less bug reports ("the search field is not
+  working", empty repro steps) into verified, regression-safe fixes. **Core principle:** the
+  fix's accuracy comes from a **verification net** (a failing reproduction + characterization
+  tests + a regression gate), NOT from thinking budget — effort only sharpens diagnosis.
+- **Entry/detection** — `bugfix_mode` setting (`"auto"` default — detect a bug spec by a
+  `Bug:`/symptom shape; `"on"`; `"off"`). When engaged, `/builder:start` runs Phases B0–B6
+  instead of the plain feature flow (Phase 2a routes the spec), reusing the existing gates.
+- **New skill `diagnose-bug`** — encodes B0 symptom intake (Bug Brief → `.claude/builder/BUG.md`
+  with parent-AC source, explicit MISSING-INFO, regression boundary from linked tests,
+  memory-recalled root-cause hypotheses), B1 reproduce-first, B2 root-cause, B3 characterization,
+  B4 minimal scoped fix, B5 regression gate, B6 honest residual report; plus the fixed BUG.md schema.
+- **New agent `builder-diagnostician`** — the **critical tier** of the dynamic-effort router
+  (`model: opus`, `effort: xhigh` pinned); runs B0–B3 + drafts the fix `PLAN.md`. Diagnosis goes
+  deep; the gates prove correctness.
+- **New `scripts/guard-bugfix.sh`** (PreToolUse) — **reproduce-first** guard: while BUG.md exists
+  and `require_reproduction` is true, blocks **source** edits until the declared repro **test**
+  exists on disk (test files + `.claude/*` always allowed; reporter-confirmed constructed repro
+  via `.claude/builder/bugfix/repro.confirmed`). Pure no-op outside a bug-fix session — does NOT
+  touch `guard-scope.sh` or its F2/F3 fixes.
+- **New `scripts/regression-gate.sh`** (Stop) — deterministic B5 gate: proves repro **red→green**
+  AND characterization/named-linked tests stay **green**. Parses test commands from BUG.md; gets
+  statuses by running them (`auto_run_tests="auto"`) or from the orchestrator-recorded ledger
+  `.claude/builder/bugfix/results.txt`. Advisory by default; hard-blocks (exit 2) under
+  `bugfix_enforce`/`BUILDER_ENFORCE`. Separate from `verify-build.sh` — leaves it untouched.
+- **Reuses, doesn't duplicate** — micro-decompose (fix tasks + coverage), per-edit feedback loop,
+  scope guard, explorer recall, and the QA pass all apply to the fix unchanged. New `bd_bug`,
+  `bd_bugfix_dir`, `bd_bugfix_enforce` helpers in `lib/common.sh`; gate logic is pure shell/awk
+  (no python dependency), robust on python-less / Windows-stub hosts.
+- **New settings (bootstrap defaults):** `bugfix_mode` (`"auto"`), `require_reproduction` (true),
+  `require_characterization` (true), `bugfix_enforce` (false), `bugfix_diagnosis_tier`
+  (`"critical"`).
+
 ## 0.3.0 — harness reliability (Cursor-style closed loops)
 - **Per-edit feedback loop** — new `scripts/lint-feedback.sh`, wired as a PostToolUse hook
   (`Write|Edit|MultiEdit|NotebookEdit`, timeout 20s). After each edit it re-checks ONLY the
