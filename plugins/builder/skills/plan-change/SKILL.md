@@ -25,7 +25,11 @@ The orchestrator surfaces these to the user; nothing is written until answered.
 
 ## Step 2 — Technical plan (only if clarity ≥ threshold)
 Write to `.claude/builder/PLAN.md`. Required sections (the deterministic gate
-`validate-plan.sh` checks these — missing any sends the plan back):
+`validate-plan.sh` checks these — missing any sends the plan back). When
+`micro_decomposition` is on (the default, read from `.claude/builder/settings.json`),
+the `## Tasks` breakdown is also required and gated — follow the `micro-decompose`
+skill (`${CLAUDE_PLUGIN_ROOT}/skills/micro-decompose/SKILL.md`) for right-sizing and
+the edge-case taxonomy:
 
 ```
 # builder plan — <spec id / short title>
@@ -45,6 +49,23 @@ Ordered steps. Each step cites evidence as path:line for anything it relies on
 (e.g. "extend the handler at OrderService.cs:142"). Separate EVIDENCE (seen in
 code) from INFERENCE (assumed) explicitly.
 
+## Tasks
+(Required when `micro_decomposition` is on — the default. Skip this section only
+when it is off.) Decompose the change per the `micro-decompose` skill into the
+smallest INDEPENDENTLY-VERIFIABLE units — proportional, never over-split: a
+one-line change is ONE task. One block per task, FIXED schema (the deterministic
+gate `validate-plan.sh` parses it):
+
+### Task 1 — <short intent>
+- Files/functions: <exact repo-relative paths / symbols this unit touches>
+- Behavior: <precise input → output; the ONE thing this unit does>
+- Edge cases:
+  - <case> → <intended handling>     (≥1; pull in the relevant MEMORY.md risks by name)
+- Definition of Done: <observable, testable completion incl. edge coverage — not just "compiles">
+
+### Task 2 — <…>
+- …
+
 ## Risks & invariants (from MEMORY.md)
 - Invariants this change must preserve (cite the MEMORY.md risk map).
 - New risks this change introduces and how the plan mitigates them.
@@ -61,6 +82,7 @@ drop the score and return to Step 1.
 ## Honesty rules
 - Never claim certainty you can't cite. "100% understood" is not allowed; state coverage and assumptions.
 - Implement only what the spec says. If you notice an unrelated improvement, list it under Assumptions as a *suggestion for the user*, never silently add it.
+- **Proportionality:** the `## Tasks` count tracks distinct *behaviors*, not lines of code. A trivial spec stays 1–2 tasks. If the breakdown wants many tasks for a small spec, collapse it; if a spec truly needs many, flag in Assumptions that it may be several specs.
 
 ## Return to orchestrator (keep it short, ≤10 lines)
 Clarity score; if clear: the Scope file list + the single riskiest step + your

@@ -59,6 +59,41 @@ flow is strictly `sub-agents → orchestrator`, never peer-to-peer. Anything the
 4. **Staleness.** Memory tracks the explored commit; when code drifts, recall flags it and
    prefers a *targeted* re-read over a full rescan.
 
+## Builder — micro-level precision (decomposition + edge-case hardening)
+The `builder` plugin reads this memory as ground truth and turns a spec into code through a
+gated plan → implement → QA loop. Its headline correctness feature is **micro-level
+precision**, which exists to kill the common failure where a large context lets a small
+edge-case bug slip through. It is on by default (`micro_decomposition`,
+`require_edge_case_coverage` in `.claude/builder/settings.json`); turn `micro_decomposition`
+off to fall back to the original single-pass flow.
+
+```
+Plan ──► PLAN.md "## Tasks": atomic, independently-verifiable units, each with an
+ │        explicit Edge cases list + Definition of Done  ──►  validate-plan.sh
+ │        (deterministic floor: rejects a missing Tasks section, or any task lacking
+ │         edge cases / a DoD, naming the exact task id)
+ ▼
+Implement ─► one task at a time (small, isolated context per unit); code handles EVERY
+ │           enumerated edge case (fail-closed when a check can't decide); appends a
+ │           per-task edge-case COVERAGE MAP to CHANGELOG.md:
+ │             <case> → handled at file:line | covered by <test> | DEFERRED:<reason>
+ ▼
+QA ───────► verifies the coverage map — every enumerated case handled or justifiably
+            deferred; score reflects edge-case coverage, not just a green build
+```
+
+- **Right-sized decomposition.** Split only as far as each unit is independently verifiable —
+  proportional, never exploded: a one-line change is ONE task. Over-splitting is treated as a
+  defect (it fragments review and hides the real seams).
+- **Edge-case taxonomy** (in `skills/micro-decompose`): inputs/boundaries, state/lifecycle,
+  IO/external, errors incl. **fail-open vs fail-closed**, numeric, security,
+  portability (OS/locale/line-endings), and contract/invariants — then **extended with the
+  codebase-specific risks named in `MEMORY.md`**, so edge cases are grounded in *this* code.
+- **Externalized, traceable, gated.** Every edge case is written to disk (PLAN.md task →
+  CHANGELOG.md coverage map), never held only "in the model's head," and the deterministic
+  gate sits under the orchestrator's 9+/10 judgment — same philosophy as the rest of the
+  system: gates for what must be true, LLM judgment on top.
+
 ## Roadmap slots (the other 3–4 plugins)
 The marketplace is ready to hold siblings that all read the same memory:
 - `builder` — implements changes using the explorer memory as ground truth.

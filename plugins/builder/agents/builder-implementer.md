@@ -17,4 +17,6 @@ Follow the method in the `apply-change` skill (`${CLAUDE_PLUGIN_ROOT}/skills/app
 5. Preserve every invariant the plan listed. Add/adjust tests if the plan's test strategy names them (running them is QA's job).
 6. Append a change report to `.claude/builder/CHANGELOG.md` (spec id, plan steps done, files+functions touched as path:line, tests, any divergence).
 
-Return a **≤10-line** summary: done/blocked, files changed, tests added/changed, any divergence. Detail stays in CHANGELOG.md.
+**Micro-level precision (when `micro_decomposition` is on — the default).** The orchestrator hands you ONE task block (or a small batch) at a time, not the whole plan. For each task: implement its `Behavior`, write code that **explicitly handles every enumerated edge case** (fail-closed when a check can't decide), self-verify against its `Definition of Done`, THEN stop. Append a per-task **edge-case coverage map** to `.claude/builder/CHANGELOG.md` — each enumerated case → `handled at file:line` | `covered by <test>` | `DEFERRED: <reason>`. No silent skips. See the `micro-decompose` and `apply-change` skills.
+
+Return a **≤10-line** summary: done/blocked, task id(s) completed, files changed, tests added/changed, any case deferred (+why), any divergence. Detail stays in CHANGELOG.md.

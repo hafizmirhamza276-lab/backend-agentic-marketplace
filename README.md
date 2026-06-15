@@ -99,6 +99,37 @@ To turn those two into hard blocks, set:
 
 or export `BUILDER_ENFORCE=1` for a single session.
 
+Two more settings drive **micro-level precision mode** (both default `true`):
+
+```json
+{ "micro_decomposition": true, "require_edge_case_coverage": true }
+```
+
+Set `micro_decomposition` to `false` to fall back to the original single-pass plan/implement.
+
+### Micro-level precision mode
+
+Big-context reasoning is where small edge-case bugs hide. This mode makes builder decompose a
+requirement into the **smallest independently-verifiable tasks** and write precise code that
+explicitly accounts for edge cases — instead of reasoning about everything at once and letting
+a boundary case slip.
+
+- **Right-sized decomposition.** The planner splits the change only as far as each unit is
+  independently verifiable, and writes a `## Tasks` block per unit in `PLAN.md` (intent,
+  files/functions, behavior, an explicit **edge-case list**, and a **Definition of Done**).
+  Proportionality is enforced: a one-line change is **one task** — no over-splitting.
+- **Edge-case taxonomy.** Each task is hardened against a fixed taxonomy — inputs/boundaries,
+  state/lifecycle, IO/external, errors (incl. **fail-open vs fail-closed**), numeric, security,
+  portability (incl. OS differences), and contract/invariants — then **extended with the
+  codebase-specific risks named in `MEMORY.md`**. See `skills/micro-decompose`.
+- **Context isolation.** The implementer works **one task at a time**, with only that task's
+  intent + edge-case list in focus — a small context by design.
+- **Coverage map + gate.** Every enumerated edge case is written down and provably addressed:
+  the implementer records a map in `CHANGELOG.md` (each case → `handled at file:line` |
+  `covered by <test>` | `DEFERRED:<reason>` — no silent skips), QA verifies it, and the
+  deterministic gate `validate-plan.sh` rejects a plan whose tasks lack edge cases or a DoD,
+  naming the exact offending task.
+
 ## How it works
 
 See `ARCHITECTURE.md`. Read-only sub-agents report to your orchestrator session, which

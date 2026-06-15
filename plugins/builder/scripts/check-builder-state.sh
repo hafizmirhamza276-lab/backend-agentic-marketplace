@@ -24,7 +24,9 @@ if [ ! -f "$SETTINGS" ]; then
   "rating_threshold": 9,
   "clarity_threshold": 9,
   "enforce_gates": false,
-  "auto_run_tests": "ask"
+  "auto_run_tests": "ask",
+  "micro_decomposition": true,
+  "require_edge_case_coverage": true
 }
 JSON
   bd_tell "initialized .claude/builder/settings.json (edit to tune gates / cost)"

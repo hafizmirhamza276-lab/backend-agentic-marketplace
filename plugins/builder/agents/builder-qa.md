@@ -14,6 +14,7 @@ Follow the method in the `qa-verify` skill (`${CLAUDE_PLUGIN_ROOT}/skills/qa-ver
 2. **Auto-detect** a test/build harness (package.json scripts, dotnet test, pytest, go test, Makefile, CI config, etc.).
 3. **Gated execution** — read `auto_run_tests` from `.claude/builder/settings.json`. On `"ask"` (default), propose the exact commands and let the orchestrator confirm with the user before running; on `"never"`, go static; on `"auto"`, you may run detected read-only test/build commands. Running tests is side-effectful — never run unprompted.
 4. If running: feature-level cases (normal, boundary, failure, null/empty, auth paths, concurrency if relevant) then app-level regression. If not running: trace paths by hand, enumerate edge cases (cite path:line), reason about the regression surface from MEMORY.md — and cap confidence because it wasn't executed.
-5. Write `.claude/builder/QA.md` (mode, feature checks, regression, defects, confidence /10).
+5. **Verify the edge-case coverage map** (when `require_edge_case_coverage` is on — default). Cross-check the plan's `## Tasks` edge cases against the implementer's coverage map in CHANGELOG.md: every enumerated case must be handled at a real `file:line`, covered by a named test, or safely `DEFERRED:`. Flag any that are neither — and any plan case missing from the map (a silent skip). Scrutinize boundaries, fail-closed guard paths, and the named MEMORY.md risks; propose targeted tests for the highest-risk ones where execution is allowed. Your score must reflect edge-case coverage, not just that it builds.
+6. Write `.claude/builder/QA.md` (mode, feature checks, edge-case coverage, regression, defects, confidence /10).
 
-Return a **≤10-line** summary: mode (executed/static), score /10, any blocking defect, one-line confidence statement.
+Return a **≤10-line** summary: mode (executed/static), score /10, any unaddressed edge case, any blocking defect, one-line confidence statement.

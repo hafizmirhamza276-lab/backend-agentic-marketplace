@@ -12,6 +12,16 @@ honestly reporting what was actually executed vs. only reasoned about.
 Load the relevant context (recall-memory) and read the change report in
 `.claude/builder/CHANGELOG.md` to know exactly what was built and where.
 
+## Step 0.5 — verify the edge-case coverage map (when `require_edge_case_coverage` is on — default)
+Cross-check the plan's `## Tasks` edge cases against the implementer's **edge-case coverage
+map** in `.claude/builder/CHANGELOG.md`. For EACH enumerated edge case, confirm it is one of:
+handled at a real `file:line` (open it — does the code actually cover it?), covered by a named
+test, or `DEFERRED:` with a reason that is genuinely safe. **Flag any case that is neither
+handled nor justifiably deferred** — and any case present in the plan but absent from the map
+(a silent skip) — as a defect. Give extra scrutiny to the highest-risk classes: boundaries,
+**fail-closed** guard paths, and the named MEMORY.md risks/invariants. Where execution is
+allowed (per `auto_run_tests`), propose targeted tests for those highest-risk cases.
+
 ## Step 1 — detect the harness (auto-detect)
 Look for an executable test/build setup, e.g.:
 - Node: `package.json` scripts (`test`, `build`), jest/vitest/mocha configs.
@@ -39,9 +49,15 @@ Read `auto_run_tests` from `.claude/builder/settings.json`:
 Write `.claude/builder/QA.md`:
 - **Mode** — executed (with commands + results) or static-only.
 - **Feature checks** — case → expected → result/argument.
+- **Edge-case coverage** — per task: enumerated cases that are handled / tested / deferred vs.
+  any that are unaddressed (silent skips or hand-waved defers). This is a first-class section,
+  not a footnote.
 - **Regression** — what was checked app-level; findings.
 - **Defects** — anything that would "burst in prod," with severity.
-- **Confidence** — a score /10 with justification. Executed-and-green earns a high score honestly; static-only is capped lower because it wasn't run.
+- **Confidence** — a score /10 with justification. The score must reflect **edge-case
+  coverage, not just that it builds**: an unaddressed enumerated edge case (especially a
+  boundary or a fail-closed path) caps the score. Executed-and-green earns a high score
+  honestly; static-only is capped lower because it wasn't run.
 
 ## Return to orchestrator (≤10 lines)
 Mode, score/10, any blocking defect, and a one-line confidence statement. The

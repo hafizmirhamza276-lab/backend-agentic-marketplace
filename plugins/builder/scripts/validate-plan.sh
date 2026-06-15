@@ -47,6 +47,51 @@ if [ -f "$EXPLORER_MEM" ] && ! grep -qiE 'MEMORY\.md|risk map|invariant' "$PLAN"
   note "plan does not reference MEMORY.md risks/invariants — confirm the change respects them"; fail=1
 fi
 
+# 5) micro-decomposition floor (only when enabled): a '## Tasks' section with >=1
+# '### Task <id>' block, and EACH block carries a non-empty 'Edge cases:' list AND
+# a 'Definition of Done:'. One task is valid — no minimum count. awk emits one
+# human-readable problem line per offending task id (or a section-level problem);
+# any output means the floor failed. Reuses the awk/grep style of the checks above;
+# no python needed (the working-interpreter detection in common.sh stays optional).
+if [ "$(bd_setting micro_decomposition true)" = "true" ]; then
+  while IFS= read -r problem; do
+    [ -n "$problem" ] || continue
+    note "$problem"; fail=1
+  done < <(awk '
+    function endtask(){
+      if(cur!=""){
+        ntasks++
+        if(ec<1)       printf("Task %s — empty or missing \"Edge cases:\" list\n", cur)
+        else if(!dod)  printf("Task %s — missing \"Definition of Done:\"\n", cur)
+      }
+      cur=""; ec=0; ecmode=0; dod=0
+    }
+    # level-2 heading toggles the Tasks section (### is level-3, excluded)
+    /^##[[:space:]]/ && $0 !~ /^###/ { endtask(); if($0 ~ /[Tt]asks/){intasks=1;seen=1}else intasks=0; next }
+    # level-3 heading inside Tasks starts a task block; capture the id (first token)
+    /^###[[:space:]]/ {
+      endtask()
+      if(intasks){ l=$0; sub(/^###[[:space:]]+/,"",l); sub(/^[Tt]ask[[:space:]]+/,"",l); sub(/[[:space:]].*$/,"",l); cur=l }
+      next
+    }
+    intasks && cur!="" {
+      if($0 ~ /[Ee]dge[[:space:]]+cases[[:space:]]*:/){
+        ecmode=1; t=$0; sub(/.*[Ee]dge[[:space:]]+cases[[:space:]]*:/,"",t); gsub(/[[:space:]]/,"",t); if(t!="")ec++; next
+      }
+      if($0 ~ /[Dd]efinition[[:space:]]+of[[:space:]]+[Dd]one[[:space:]]*:/){
+        ecmode=0; t=$0; sub(/.*[Dd]one[[:space:]]*:/,"",t); gsub(/[[:space:]]/,"",t); if(t!="")dod=1; next
+      }
+      if(ecmode && $0 ~ /^[[:space:]]+[-*][[:space:]]+[^[:space:]]/){ ec++; next }   # an edge-case sub-bullet
+      if($0 ~ /^[-*][[:space:]]/){ ecmode=0 }                                        # a new top-level field ends the list
+    }
+    END{
+      endtask()
+      if(!seen)            print "micro_decomposition is on but PLAN.md has no \"## Tasks\" section (set micro_decomposition=false for single-pass)"
+      else if(ntasks<1)    print "\"## Tasks\" section has no \"### Task <id>\" blocks"
+    }
+  ' "$PLAN")
+fi
+
 if [ "$fail" -ne 0 ]; then
   bd_warn "plan FAILED structural validation (see above). Return exact items to the planner."
   exit 1
