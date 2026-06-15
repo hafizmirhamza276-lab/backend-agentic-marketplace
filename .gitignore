@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Local agent / session state — machine-specific, not part of the marketplace.
+# ---------------------------------------------------------------------------
+# .ai/ is the project session-track ledger written by the SessionStart hook.
+.ai/
+# Claude Code per-user local settings (never shared).
+.claude/settings.local.json
+
+# Keep the durable explorer codebase memory committable — it IS meant to be
+# checked in per the explorer plugin design. Do NOT ignore it.
+!.claude/explorer/
+
+# ---------------------------------------------------------------------------
+# Stray / duplicate plugin copies. The canonical plugins live under plugins/;
+# marketplace.json points at ./plugins/builder. builder-plugin/ is an older
+# divergent duplicate of plugins/builder — keep it out of the repo.
+# ---------------------------------------------------------------------------
+builder-plugin/
+
+# ---------------------------------------------------------------------------
+# OS / editor cruft
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ---------------------------------------------------------------------------
+# Tooling / build output (in case any is added later)
+# ---------------------------------------------------------------------------
+node_modules/
+*.log

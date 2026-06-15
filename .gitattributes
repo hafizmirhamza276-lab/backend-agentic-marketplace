@@ -1,0 +1,6 @@
+# Normalize line endings: let git decide text vs binary, store text as LF in the repo.
+* text=auto
+
+# Shell scripts MUST be LF — CRLF breaks the shebang (#!/usr/bin/env bash) on Linux/macOS.
+*.sh   text eol=lf
+*.bash text eol=lf
