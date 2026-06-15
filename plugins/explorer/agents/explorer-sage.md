@@ -5,7 +5,6 @@ model: opus
 effort: high
 maxTurns: 40
 tools: Read, Grep, Glob, Bash
-disallowedTools: Write, Edit, MultiEdit
 skills: explore-codebase
 ---
 

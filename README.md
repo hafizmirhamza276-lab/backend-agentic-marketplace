@@ -80,9 +80,18 @@ claude --plugin-dir ./plugins/builder
 
 ### Configuration
 
-Builder settings live in `.claude/builder/settings.json`. By **default `enforce_gates` is
-`false`**, which means the scope guard and build-verify hooks are **advisory** — they warn but
-do not block. To make them **hard-block** out-of-scope edits and failed builds, set:
+Builder settings live in `.claude/builder/settings.json`. The scope guard is **not**
+advisory: once an approved `.claude/builder/PLAN.md` exists, edits to files outside its
+Scope are **always hard-blocked**, regardless of `enforce_gates`. "Scope is law" is a hard
+guarantee, not a setting.
+
+`enforce_gates` (default **`false`**) controls only the two genuinely advisory gates:
+
+- **editing before a plan exists** — warns by default; hard-blocks when enforced;
+- **the build-verify Stop gate** — warns about failed verification by default; hard-blocks
+  (keeps Claude working) only when enforced.
+
+To turn those two into hard blocks, set:
 
 ```json
 { "enforce_gates": true }

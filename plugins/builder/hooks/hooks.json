@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/check-builder-state.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/check-builder-state.sh",
+            "timeout": 10
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard-scope.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard-scope.sh",
+            "timeout": 10
           }
         ]
       }
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/record-progress.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/record-progress.sh",
+            "timeout": 10
           }
         ]
       }
@@ -36,7 +39,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/verify-build.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/verify-build.sh",
+            "timeout": 10
           }
         ]
       }

@@ -12,7 +12,9 @@ mkdir -p "$BUILDER_DIR" 2>/dev/null || true
 LOG="$(bd_changelog)"
 
 bd_load_hook_input
-AGENT="$(bd_hook_field subagent_type)"; [ -n "$AGENT" ] || AGENT="$(bd_hook_field agent_type)"
+# SubagentStop's documented key is agent_type; fall back to subagent_type for older
+# Claude Code builds (F7).
+AGENT="$(bd_hook_field agent_type)"; [ -n "$AGENT" ] || AGENT="$(bd_hook_field subagent_type)"
 [ -n "$AGENT" ] || AGENT="sub-agent"
 TS="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
 

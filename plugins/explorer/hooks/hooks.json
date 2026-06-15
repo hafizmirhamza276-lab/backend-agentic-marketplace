@@ -5,18 +5,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/check-memory.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/check-memory.sh",
+            "timeout": 10
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard-readonly.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard-readonly.sh",
+            "timeout": 10
           }
         ]
       }
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/record-coverage.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/record-coverage.sh",
+            "timeout": 10
           }
         ]
       }
@@ -36,7 +39,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/verify-output.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/verify-output.sh",
+            "timeout": 10
           }
         ]
       }

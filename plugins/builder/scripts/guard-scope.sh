@@ -17,8 +17,10 @@ TARGET="$(bd_hook_field tool_input.file_path)"
 [ -n "$TARGET" ] || exit 0   # nothing to check
 
 PROJECT="$(bd_project_dir)"
-# repo-relative form
+# repo-relative form, with '.'/'..' collapsed FIRST so a `..` segment can neither
+# escape the allow-zone below nor sneak past the scope check (F2).
 REL="${TARGET#"$PROJECT"/}"
+REL="$(bd_normalize_path "$REL")"
 
 # Always allow the plugin's own durable memory + specs.
 case "$REL" in
@@ -52,11 +54,11 @@ if [ -z "$SCOPE" ]; then
   exit 0
 fi
 
-# membership check (exact match on repo-relative path or basename match)
-BASE="$(basename "$REL")"
+# membership check: repo-relative path equality (with a './' prefix tolerance).
+# No basename fallback — a bare-filename match would admit a same-named file in
+# another directory (F3); scope membership requires the full repo-relative path.
 if printf '%s\n' "$SCOPE" | grep -qxF "$REL" \
-   || printf '%s\n' "$SCOPE" | grep -qxF "./$REL" \
-   || printf '%s\n' "$SCOPE" | grep -qxF "$BASE"; then
+   || printf '%s\n' "$SCOPE" | grep -qxF "./$REL"; then
   exit 0
 fi
 

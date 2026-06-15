@@ -41,7 +41,7 @@ fi
 # index.json path-resolution check (the explorer fix).
 if [ -f "$INDEX" ]; then
   if bd_have_python; then
-    MISSING="$(PROJECT="$PROJECT" python3 - "$INDEX" <<'PY' 2>/dev/null || true
+    MISSING="$(PROJECT="$PROJECT" $BD_PYTHON - "$INDEX" <<'PY' 2>/dev/null || true
 import json, os, sys
 proj = os.environ["PROJECT"]
 miss = []
@@ -67,7 +67,7 @@ PY
       printf '%s\n' "$MISSING" | sed 's/^/      • /' >&2
     fi
   else
-    bd_warn "python3 absent — skipping index.json path-resolution check."
+    bd_warn "no working python interpreter — skipping index.json path-resolution check."
   fi
 fi
 

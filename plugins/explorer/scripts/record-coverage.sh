@@ -8,13 +8,27 @@ DIR="$PROJECT_DIR/.claude/explorer"
 TRACK="$DIR/TRACK.md"
 mkdir -p "$DIR" 2>/dev/null || true
 
-event="$(cat 2>/dev/null || true)"
+# Resolve a WORKING python interpreter (skip the Windows Store `python3` stub, which is
+# on PATH but exits non-zero with empty stdout).
+resolve_python() {
+  local c
+  for c in python3 python "py -3"; do
+    if $c -c "pass" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
+  done
+  return 0
+}
+PY_BIN="$(resolve_python)"
+
+# Read the payload; skip when stdin is a terminal so a missing payload can't block (F11).
+if [ -t 0 ]; then event=""; else event="$(cat 2>/dev/null || true)"; fi
 name=""
-if command -v python3 >/dev/null 2>&1; then
-  name="$(printf '%s' "$event" | python3 -c 'import sys,json
+if [[ -n "$PY_BIN" ]]; then
+  # SubagentStop's documented key is agent_type; fall back to subagent_type for older
+  # Claude Code builds (F7).
+  name="$(printf '%s' "$event" | $PY_BIN -c 'import sys,json
 try:
     d=json.load(sys.stdin)
-    print(d.get("subagent_type") or d.get("agent") or d.get("name") or "subagent")
+    print(d.get("agent_type") or d.get("subagent_type") or d.get("agent") or d.get("name") or "subagent")
 except Exception:
     print("subagent")' 2>/dev/null)"
 fi

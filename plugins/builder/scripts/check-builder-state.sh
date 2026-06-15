@@ -27,24 +27,27 @@ if [ ! -f "$SETTINGS" ]; then
   "auto_run_tests": "ask"
 }
 JSON
-  bd_say "initialized .claude/builder/settings.json (edit to tune gates / cost)"
+  bd_tell "initialized .claude/builder/settings.json (edit to tune gates / cost)"
 fi
 
 # 2) explorer memory dependency
 if [ ! -f "$EXPLORER_MEM" ]; then
-  bd_warn "no explorer memory at .claude/explorer/MEMORY.md — run /explorer:start before building."
+  bd_tellwarn "no explorer memory at .claude/explorer/MEMORY.md — run /explorer:start before building."
   exit 0
 fi
 
-EXPLORED_COMMIT="$(grep -oE 'explored_commit:[[:space:]]*[A-Za-z0-9]+' "$EXPLORER_MEM" 2>/dev/null | head -n1 | sed -E 's/.*:[[:space:]]*//')"
+# `|| true`: a MEMORY.md without an explored_commit: line makes the grep pipeline exit
+# non-zero, which under `set -euo pipefail` would abort the hook and skip the recall
+# nudge below (F8).
+EXPLORED_COMMIT="$(grep -oE 'explored_commit:[[:space:]]*[A-Za-z0-9]+' "$EXPLORER_MEM" 2>/dev/null | head -n1 | sed -E 's/.*:[[:space:]]*//' || true)"
 HEAD="$(bd_git_head)"
 if [ -n "$EXPLORED_COMMIT" ] && [ "$HEAD" != "unknown" ] && [ "$EXPLORED_COMMIT" != "$HEAD" ]; then
-  bd_warn "explorer memory is STALE (explored=$EXPLORED_COMMIT, HEAD=$HEAD). Re-run /explorer:start so the plan is grounded in current code."
+  bd_tellwarn "explorer memory is STALE (explored=$EXPLORED_COMMIT, HEAD=$HEAD). Re-run /explorer:start so the plan is grounded in current code."
 fi
 
-# 3) recall nudge
-bd_say "builder ready. RECALL .claude/explorer/* via the context-finder sub-agent — do not re-scan the codebase."
+# 3) recall nudge — SessionStart context goes to STDOUT so Claude actually ingests it (F6).
+bd_tell "builder ready. RECALL .claude/explorer/* via the context-finder sub-agent — do not re-scan the codebase."
 if [ -f "$(bd_plan)" ]; then
-  bd_say "an in-progress plan exists at .claude/builder/PLAN.md — review it before starting new work."
+  bd_tell "an in-progress plan exists at .claude/builder/PLAN.md — review it before starting new work."
 fi
 exit 0

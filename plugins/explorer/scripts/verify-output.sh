@@ -11,6 +11,19 @@ ENFORCE="${EXPLORER_ENFORCE:-0}"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 DIR="$PROJECT_DIR/.claude/explorer"
 
+# Resolve a WORKING python interpreter for JSON validation. On Windows `python3` is
+# often the Microsoft Store stub: on PATH but exits non-zero with empty stdout. Trusting
+# it would make `json.load` "fail" on perfectly valid JSON and (under ENFORCE) block the
+# Stop. Require the interpreter to actually run; "" means none works → skip the check (F4).
+resolve_python() {
+  local c
+  for c in python3 python "py -3"; do
+    if $c -c "pass" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
+  done
+  return 0
+}
+PY_BIN="$(resolve_python)"
+
 # Nothing to verify if exploration was never started.
 [[ -d "$DIR" ]] || exit 0
 
@@ -27,8 +40,8 @@ if [[ -f "$DIR/MEMORY.md" ]]; then
   grep -qE '^coverage:' "$DIR/MEMORY.md"        || problems+=("MEMORY.md missing coverage")
 fi
 
-if [[ -f "$DIR/index.json" ]] && command -v python3 >/dev/null 2>&1; then
-  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$DIR/index.json" 2>/dev/null \
+if [[ -f "$DIR/index.json" ]] && [[ -n "$PY_BIN" ]]; then
+  $PY_BIN -c 'import json,sys; json.load(open(sys.argv[1]))' "$DIR/index.json" 2>/dev/null \
     || problems+=("index.json is not valid JSON")
 fi
 
