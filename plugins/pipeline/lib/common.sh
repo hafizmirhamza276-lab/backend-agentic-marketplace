@@ -248,10 +248,34 @@ bd_json_escape() {
   printf '%s' "$s"
 }
 
-# bd_status_write <module> <phase> <state> [coverage]
+# bd_status_write <module> <phase> <state> [coverage] [k1=v1 k2=v2 ...]
+# (A, extended) Optional trailing `key=value` pairs are merged into STATUS.json AFTER the six
+# fixed fields, in the order given. A value that is ALL digits becomes a JSON NUMBER; any other
+# value (including the empty string) becomes a JSON STRING — escaped via bd_json_escape in the
+# shell writer and by json.dump in the python writer, so even an adversarial value stays valid
+# JSON. This is the bridge the release gate needs: the auditor records `high=/med=/low=` counts
+# (read back generically by bd_status_read, enforced as 0-high by verify-release.sh).
+#
+# INVARIANTS this extension preserves (so the existing 16 + 66 tests stay green):
+#   - With NO extras the output is BYTE-IDENTICAL to the prior writer (still exactly 8 lines:
+#     `{`, six fields, `}`), so the python-free 8-line control and the python<->shell
+#     byte-agreement / round-trip tests are unaffected.
+#   - The python and pure-shell writers emit BYTE-IDENTICAL JSON for the same SAFE inputs
+#     (ASCII keys/values, no leading-zero digit strings) — exactly the inputs this project
+#     emits — so either writer round-trips with either reader, extras included. (The same
+#     pre-existing divergence the fixed fields already carry applies: a non-ASCII value is
+#     \uXXXX-escaped by python but left as raw UTF-8 by the shell, and a zero-padded digit
+#     string is normalized by python's int() but kept verbatim by the shell — both remain
+#     valid JSON; neither shape occurs for the enum states / unpadded counts in use.)
+#   - A 3-arg call (coverage omitted), e.g. `bd_status_write pipeline release done`, still works:
+#     the `shift 4` that collects extras only runs when there ARE extras ($# > 4).
 bd_status_write() {
   local module="$1" phase="$2" state="$3" coverage="${4:-}"
   local dir file commit updated cov
+  # Everything after the 4th positional is an extra k=v pair. Guard the shift so a 3-arg call
+  # (no coverage) never errors with "shift count out of range".
+  local -a extras=()
+  if [ "$#" -gt 4 ]; then shift 4; extras=("$@"); fi
   dir="$(bd_claude_dir)/$module"
   file="$dir/STATUS.json"
   mkdir -p "$dir" 2>/dev/null || true
@@ -261,10 +285,13 @@ bd_status_write() {
   if bd_have_python; then
     # The interpreter writes the file directly; if it fails for ANY reason we fall
     # through to the pure-shell writer below (so a stub python can never half-write).
+    # Extras ride in on argv (ordered) — `python -` reads the program from the heredoc on
+    # stdin, so sys.argv[1:] carries the k=v pairs. The `${extras[@]+...}` guard keeps the
+    # empty-array expansion safe under callers' `set -u`.
     BD_F="$file" BD_M="$module" BD_P="$phase" BD_S="$state" \
     BD_C="$coverage" BD_CM="$commit" BD_T="$updated" \
-    $BD_PYTHON - <<'PY' 2>/dev/null && return 0
-import json, os
+    $BD_PYTHON - ${extras[@]+"${extras[@]}"} <<'PY' 2>/dev/null && return 0
+import json, os, sys
 c = os.environ.get("BD_C", "")
 doc = {
     "module":     os.environ.get("BD_M", ""),
@@ -274,6 +301,11 @@ doc = {
     "coverage":   int(c) if c.isdigit() else None,
     "updated_at": os.environ.get("BD_T", ""),
 }
+for pair in sys.argv[1:]:
+    k, sep, v = pair.partition("=")
+    if not sep:
+        continue                       # no '=' -> not a pair; skip (mirrors the shell writer)
+    doc[k] = int(v) if v.isdigit() else v
 with open(os.environ["BD_F"], "w") as fh:
     json.dump(doc, fh, indent=2)
     fh.write("\n")
@@ -293,14 +325,36 @@ PY
     ''|*[!0-9]*) cov="null" ;;
     *)           cov="$coverage" ;;
   esac
+  # Build the field bodies (`  "key": value`, NO trailing comma) in order: the six fixed fields
+  # then any extras. Joining with ",\n" at emit time puts a comma after every field EXCEPT the
+  # last — for any number of extras — which is exactly what json.dump(indent=2) produces, so
+  # the no-extras case stays the prior 8-line file and the with-extras case matches python.
+  local -a fields=()
+  local line
+  printf -v line '  "module": "%s"'     "$e_module";  fields+=("$line")
+  printf -v line '  "phase": "%s"'      "$e_phase";   fields+=("$line")
+  printf -v line '  "state": "%s"'      "$e_state";   fields+=("$line")
+  printf -v line '  "commit": "%s"'     "$e_commit";  fields+=("$line")
+  printf -v line '  "coverage": %s'     "$cov";       fields+=("$line")
+  printf -v line '  "updated_at": "%s"' "$e_updated"; fields+=("$line")
+  local pair k v jv ek
+  for pair in ${extras[@]+"${extras[@]}"}; do
+    k="${pair%%=*}"; v="${pair#*=}"
+    [ "$pair" = "$k" ] && continue     # no '=' -> not a pair; skip (mirrors the python writer)
+    case "$v" in
+      ''|*[!0-9]*) jv="\"$(bd_json_escape "$v")\"" ;;   # string  -> quoted, escaped body
+      *)           jv="$v" ;;                            # all digits -> bare JSON number
+    esac
+    ek="$(bd_json_escape "$k")"
+    printf -v line '  "%s": %s' "$ek" "$jv"; fields+=("$line")
+  done
   {
     printf '{\n'
-    printf '  "module": "%s",\n'    "$e_module"
-    printf '  "phase": "%s",\n'     "$e_phase"
-    printf '  "state": "%s",\n'     "$e_state"
-    printf '  "commit": "%s",\n'    "$e_commit"
-    printf '  "coverage": %s,\n'    "$cov"
-    printf '  "updated_at": "%s"\n' "$e_updated"
+    local i=0 n=${#fields[@]}
+    while [ "$i" -lt "$n" ]; do
+      if [ "$i" -lt "$((n - 1))" ]; then printf '%s,\n' "${fields[i]}"; else printf '%s\n' "${fields[i]}"; fi
+      i=$((i + 1))
+    done
     printf '}\n'
   } > "$file" 2>/dev/null || true
   return 0

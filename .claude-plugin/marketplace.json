@@ -35,6 +35,14 @@
       "version": "0.1.0",
       "category": "orchestration",
       "author": { "name": "hafizmirhamza276-lab" }
+    },
+    {
+      "name": "auditor",
+      "source": "./plugins/auditor",
+      "description": "Audits this marketplace against its own F1–F13 failure classes: deterministic pure-shell/awk regression detectors (fail-open, path traversal, broken hook contracts, manifest + vendored-lib drift, notebook/stdin/timeout/line-ending gaps) plus breadth+depth review sub-agents. Writes .claude/auditor/FINDINGS.md and records a HIGH count in the STATUS contract so the pipeline release gate enforces 0-high. Silent on a clean tree; no python dependency.",
+      "version": "0.1.0",
+      "category": "code-quality",
+      "author": { "name": "hafizmirhamza276-lab" }
     }
   ]
 }

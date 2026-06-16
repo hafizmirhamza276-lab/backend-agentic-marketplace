@@ -13,7 +13,7 @@ ROOT=$(dirname "$SCRIPT_DIR")
 SRC="$ROOT/shared/lib/common.sh"
 [ -f "$SRC" ] || { echo "check-shared-sync: canonical lib missing: $SRC" >&2; exit 1; }
 
-DESTS="$ROOT/plugins/builder/lib/common.sh $ROOT/plugins/explorer/lib/common.sh $ROOT/plugins/pipeline/lib/common.sh"
+DESTS="$ROOT/plugins/builder/lib/common.sh $ROOT/plugins/explorer/lib/common.sh $ROOT/plugins/pipeline/lib/common.sh $ROOT/plugins/auditor/lib/common.sh"
 
 rc=0
 for dest in $DESTS; do
