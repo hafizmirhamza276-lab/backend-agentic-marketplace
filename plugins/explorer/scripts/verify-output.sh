@@ -3,26 +3,19 @@
 # Advisory by default (exit 0) so it never blocks normal turns. Only speaks up when a
 # .claude/explorer/ directory exists, i.e. an exploration has been attempted.
 #
-# To ENFORCE (make Claude keep working until the memory is complete), set ENFORCE=1.
+# To ENFORCE (make Claude keep working until the memory is complete), set EXPLORER_ENFORCE=1.
 # When enforcing, an incomplete memory exits 2, which feeds the reason back to Claude.
+#
+# The working-python resolution now comes from the vendored lib/common.sh (so the Windows
+# Store `python3` stub can't false-fail valid JSON). We keep `set -uo pipefail` (NOT -e).
 set -uo pipefail
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SELF_DIR/../lib/common.sh"
 ENFORCE="${EXPLORER_ENFORCE:-0}"
 
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+PROJECT_DIR="$(bd_project_dir)"
 DIR="$PROJECT_DIR/.claude/explorer"
-
-# Resolve a WORKING python interpreter for JSON validation. On Windows `python3` is
-# often the Microsoft Store stub: on PATH but exits non-zero with empty stdout. Trusting
-# it would make `json.load` "fail" on perfectly valid JSON and (under ENFORCE) block the
-# Stop. Require the interpreter to actually run; "" means none works → skip the check (F4).
-resolve_python() {
-  local c
-  for c in python3 python "py -3"; do
-    if $c -c "pass" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
-  done
-  return 0
-}
-PY_BIN="$(resolve_python)"
 
 # Nothing to verify if exploration was never started.
 [[ -d "$DIR" ]] || exit 0
@@ -40,8 +33,11 @@ if [[ -f "$DIR/MEMORY.md" ]]; then
   grep -qE '^coverage:' "$DIR/MEMORY.md"        || problems+=("MEMORY.md missing coverage")
 fi
 
-if [[ -f "$DIR/index.json" ]] && [[ -n "$PY_BIN" ]]; then
-  $PY_BIN -c 'import json,sys; json.load(open(sys.argv[1]))' "$DIR/index.json" 2>/dev/null \
+# Validate index.json ONLY with a working interpreter. When none is resolvable (a
+# python-less host, or the Windows Store `python3` stub) the check is SKIPPED, never
+# failed — so valid JSON is not false-flagged (F4).
+if [[ -f "$DIR/index.json" ]] && bd_have_python; then
+  $BD_PYTHON -c 'import json,sys; json.load(open(sys.argv[1]))' "$DIR/index.json" 2>/dev/null \
     || problems+=("index.json is not valid JSON")
 fi
 
