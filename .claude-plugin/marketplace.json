@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "backend-agentic-marketplace",
   "version": "0.1.0",
-  "description": "Agentic backend-engineering plugins for Claude Code. Plugin #1: explorer (explore-once, understand-forever codebase memory). Plugin #2: builder (spec-driven agentic implementation with gates and memory sync).",
+  "description": "Agentic backend-engineering plugins for Claude Code. Plugin #1: explorer (explore-once, understand-forever codebase memory). Plugin #2: builder (spec-driven agentic implementation with gates and memory sync). Plugin #3: pipeline (conductor that sequences explorer -> builder and gates a release behind a deterministic, python-free release gate).",
   "owner": {
     "name": "hafizmirhamza276-lab",
     "email": "hafizmirhamza276@gmail.com",
@@ -26,6 +26,14 @@
       "description": "Spec-driven agentic implementation for Claude Code. Reads explorer codebase memory as ground truth, plans a requested change with clarity + technical-plan gates (9/10 required), implements only what the spec says, runs hybrid QA, and keeps the durable memory in sync. Includes a reproduce-first BUG-FIX MODE (failing reproduction + characterization tests + deterministic regression gate) for vague, repro-less bug reports.",
       "version": "0.4.0",
       "category": "code-implementation",
+      "author": { "name": "hafizmirhamza276-lab" }
+    },
+    {
+      "name": "pipeline",
+      "source": "./plugins/pipeline",
+      "description": "Conductor plugin: sequences the explorer -> builder flow (running exploration first when memory is missing/stale, then the spec-driven build or BUG-FIX MODE) and gates the result behind a deterministic RELEASE GATE — fresh explorer memory, builder done with a full task coverage map, bug-fix verification net green, CHANGELOG present, and (when present) auditor 0-high. Advisory by default; enforce via settings.enforce_release or PIPELINE_ENFORCE=1. The gate is pure shell/awk, so it behaves identically on python-less / Windows hosts.",
+      "version": "0.1.0",
+      "category": "orchestration",
       "author": { "name": "hafizmirhamza276-lab" }
     }
   ]

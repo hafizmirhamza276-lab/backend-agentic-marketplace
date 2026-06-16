@@ -17,6 +17,11 @@ bd_changelog()    { printf '%s/CHANGELOG.md' "$(bd_builder_dir)"; }
 # gate state (the run-results ledger, the reproduce-first override marker).
 bd_bug()          { printf '%s/BUG.md'   "$(bd_builder_dir)"; }
 bd_bugfix_dir()   { printf '%s/bugfix'   "$(bd_builder_dir)"; }
+# Conductor (pipeline) plugin artifacts. The release gate writes RELEASE.md + STATUS here
+# and reads its own settings (e.g. enforce_release) from .claude/pipeline/settings.json.
+bd_pipeline_dir()      { printf '%s/pipeline'      "$(bd_claude_dir)"; }
+bd_pipeline_settings() { printf '%s/settings.json' "$(bd_pipeline_dir)"; }
+bd_release_md()        { printf '%s/RELEASE.md'    "$(bd_pipeline_dir)"; }
 
 # --- environment probes ------------------------------------------------------
 bd_have() { command -v "$1" >/dev/null 2>&1; }
@@ -52,9 +57,12 @@ bd_git_head() {
 }
 
 # --- settings ----------------------------------------------------------------
-# bd_setting <key> <default>  -> reads .claude/builder/settings.json
-bd_setting() {
-  local key="$1" def="$2" file; file="$(bd_settings)"
+# bd_setting_at <file> <key> <default> : read a top-level key from ANY settings JSON, using
+# the working python when present and a crude grep fallback otherwise (so it never DEPENDS
+# on python). This is the generic primitive; bd_setting is the builder-settings
+# specialization, and the pipeline release gate reads its own settings via this same form.
+bd_setting_at() {
+  local file="$1" key="$2" def="$3"
   [ -f "$file" ] || { printf '%s' "$def"; return; }
   if bd_have_python; then
     $BD_PYTHON - "$file" "$key" "$def" <<'PY' 2>/dev/null || printf '%s' "$def"
@@ -76,10 +84,22 @@ PY
   fi
 }
 
+# bd_setting <key> <default>  -> reads .claude/builder/settings.json
+bd_setting() { bd_setting_at "$(bd_settings)" "$1" "$2"; }
+
 # Gates enforce (hard-block) only when asked. Default = advisory.
 bd_enforce() {
   [ "${BUILDER_ENFORCE:-}" = "1" ] && return 0
   [ "$(bd_setting enforce_gates false)" = "true" ] && return 0
+  return 1
+}
+
+# Release gate enforce (pipeline conductor). Advisory by default; hard-blocks (exit 2)
+# only when PIPELINE_ENFORCE=1 or settings.enforce_release=true in
+# .claude/pipeline/settings.json. Mirrors bd_enforce so the gate stays opt-in.
+bd_release_enforce() {
+  [ "${PIPELINE_ENFORCE:-}" = "1" ] && return 0
+  [ "$(bd_setting_at "$(bd_pipeline_settings)" enforce_release false)" = "true" ] && return 0
   return 1
 }
 
@@ -158,9 +178,20 @@ bd_block() { printf '%s\n' "$*" >&2; exit 2; }
 # bd_normalize_path <path> : collapse '.' and '..' segments LEXICALLY (no filesystem
 # access; works for non-existent paths). Keeps a leading '/' for absolute inputs.
 # Used by the scope guard so a `..` segment can't escape the allow-zone (F2).
+#
+# Windows backslash robustness (B): Claude Code may hand us '\'-separated paths on
+# Windows, so we fold EVERY '\' to '/' BEFORE collapsing '.'/'..'. Without this pre-step
+# a backslashed traversal such as `a\..\b` or `.claude\explorer\..\..\evil` would be seen
+# as ONE opaque segment and slip straight past the '..' logic (the allow-zone escape that
+# F2 guards against). Trade-off: a LITERAL backslash in a POSIX filename is consequently
+# treated as a path separator — acceptable for a Windows-first tool, and pure forward-slash
+# paths are completely unaffected (their behavior is byte-for-byte unchanged). Both
+# guard-readonly.sh and guard-scope.sh route through this one function, so the conversion
+# applies consistently in BOTH.
 bd_normalize_path() {
   local input="$1" lead="" seg n=0
   local -a parts=()
+  input=${input//\\//}                 # (B) '\' -> '/' before ANY segment analysis
   case "$input" in /*) lead="/" ;; esac
   set -f
   local IFS='/'
@@ -197,6 +228,26 @@ bd_normalize_path() {
 # writers emit byte-identical JSON so either path round-trips with either reader.
 bd_status_file() { printf '%s/%s/STATUS.json' "$(bd_claude_dir)" "$1"; }
 
+# bd_json_escape <string> : minimal JSON string-BODY escaper for the PURE-SHELL writer (A).
+# Doubles backslashes and escapes double-quotes, and neutralizes the control characters
+# that would otherwise break a one-line JSON string (CR dropped; LF/TAB -> space) so even
+# an ADVERSARIAL field value still emits SYNTACTICALLY VALID JSON. Order matters:
+# backslashes are doubled FIRST, then quotes — otherwise the backslash we add in front of a
+# quote would itself be re-doubled. For safe/enum inputs (no '\', '"', CR, LF, or TAB) every
+# substitution is a no-op, so the shell writer stays BYTE-IDENTICAL to the python writer and
+# the existing round-trip tests keep passing. (Unlike python json with ensure_ascii, this
+# leaves non-ASCII as raw UTF-8 — still valid JSON, merely not \uXXXX-escaped; that
+# divergence only ever occurs for non-safe inputs, which the contract allows.)
+bd_json_escape() {
+  local s="$1"
+  s=${s//\\/\\\\}      # \  -> \\   (MUST run first)
+  s=${s//\"/\\\"}      # "  -> \"
+  s=${s//$'\r'/}       # CR -> drop
+  s=${s//$'\n'/ }      # LF -> space
+  s=${s//$'\t'/ }      # TAB -> space
+  printf '%s' "$s"
+}
+
 # bd_status_write <module> <phase> <state> [coverage]
 bd_status_write() {
   local module="$1" phase="$2" state="$3" coverage="${4:-}"
@@ -228,19 +279,28 @@ with open(os.environ["BD_F"], "w") as fh:
     fh.write("\n")
 PY
   fi
-  # Pure-shell fallback: hand-emit the SAME JSON shape python would (indent=2).
+  # Pure-shell fallback: hand-emit the SAME JSON shape python would (indent=2). Every
+  # STRING field is JSON-escaped FIRST (A) so an adversarial value (a stray '"', '\', or a
+  # newline) can never break the JSON; for the safe/enum inputs this project actually emits,
+  # the escape is a no-op, so this stays byte-identical to the python writer.
+  local e_module e_phase e_state e_commit e_updated
+  e_module="$(bd_json_escape "$module")"
+  e_phase="$(bd_json_escape "$phase")"
+  e_state="$(bd_json_escape "$state")"
+  e_commit="$(bd_json_escape "$commit")"
+  e_updated="$(bd_json_escape "$updated")"
   case "$coverage" in
     ''|*[!0-9]*) cov="null" ;;
     *)           cov="$coverage" ;;
   esac
   {
     printf '{\n'
-    printf '  "module": "%s",\n'    "$module"
-    printf '  "phase": "%s",\n'     "$phase"
-    printf '  "state": "%s",\n'     "$state"
-    printf '  "commit": "%s",\n'    "$commit"
+    printf '  "module": "%s",\n'    "$e_module"
+    printf '  "phase": "%s",\n'     "$e_phase"
+    printf '  "state": "%s",\n'     "$e_state"
+    printf '  "commit": "%s",\n'    "$e_commit"
     printf '  "coverage": %s,\n'    "$cov"
-    printf '  "updated_at": "%s"\n' "$updated"
+    printf '  "updated_at": "%s"\n' "$e_updated"
     printf '}\n'
   } > "$file" 2>/dev/null || true
   return 0

@@ -21,7 +21,7 @@ SRC="$ROOT/shared/lib/common.sh"
 
 # One vendored destination per plugin, each under the plugin's OWN root so the
 # plugin never reaches outside itself at runtime.
-DESTS="$ROOT/plugins/builder/lib/common.sh $ROOT/plugins/explorer/lib/common.sh"
+DESTS="$ROOT/plugins/builder/lib/common.sh $ROOT/plugins/explorer/lib/common.sh $ROOT/plugins/pipeline/lib/common.sh"
 
 for dest in $DESTS; do
   mkdir -p "$(dirname "$dest")"
