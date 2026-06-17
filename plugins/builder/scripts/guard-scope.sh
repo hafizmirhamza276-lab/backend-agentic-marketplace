@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # guard-scope.sh — PreToolUse gate for Write|Edit|MultiEdit|NotebookEdit.
 # Enforces the consistency contract: builder may ONLY touch files listed in the
-# approved .claude/builder/PLAN.md scope. Writes to the plugin's own memory
-# (.claude/) are always allowed. Blocks (exit 2) on out-of-scope edits.
+# approved .claude/builder/PLAN.md scope. The builder's own state (.claude/builder/*,
+# .claude/specs/*) plus the narrow memory-sync risk-map artifacts are always allowed;
+# all OTHER .claude/ paths are scope-checked. Blocks (exit 2) on out-of-scope edits.
 #
 # Advisory by default for the "no plan yet" case (warns); becomes a hard block
 # when enforce mode is on (BUILDER_ENFORCE=1 or settings.enforce_gates=true).
@@ -22,9 +23,27 @@ PROJECT="$(bd_project_dir)"
 REL="${TARGET#"$PROJECT"/}"
 REL="$(bd_normalize_path "$REL")"
 
-# Always allow the plugin's own durable memory + specs.
+# Always-allow zone: the builder's OWN durable state + the specs it implements.
+# (B) NARROWED from a blanket `.claude/*`, which was over-permissive: it let the builder
+# write to ANY other module's state (.claude/pipeline/, .claude/auditor/, .claude/reviewer/,
+# .claude/ops/, …) outside the approved plan. Only the builder's own dir and the specs are
+# unconditionally writable now; every OTHER .claude/ path falls through to the scope check
+# (so e.g. .claude/pipeline/STATUS.json is blocked unless the PLAN.md Scope names it).
+#
+# Memory-sync carve-out (NARROW, intentional): the builder's FINAL phase
+# (builder-memory-sync — start.md Phase 7; agents/builder-memory-sync.md) legitimately writes
+# the explorer "risk map" back after a build/bug-fix — exactly MEMORY.md, index.json, TRACK.md,
+# and the map/<area>.md deep-dives (skills/sync-memory/SKILL.md "What to update"; diagnose-bug
+# SKILL.md:123 "records the bug + fix into the durable risk map (MEMORY.md / index.json /
+# TRACK.md)"). That phase runs while PLAN.md still exists, and those paths are NOT in the plan's
+# Scope (which lists source + test files), so the narrowed guard would otherwise block the
+# legitimate sync. We therefore allow ONLY those four exact artifacts — deliberately NOT a
+# blanket `.claude/explorer/*`, so the builder still cannot write arbitrary explorer state
+# (a stray `.claude/explorer/anything-else` stays subject to the scope check). `..` can't widen
+# this: REL was lexically normalized above before any of these patterns are matched.
 case "$REL" in
-  .claude/*) exit 0 ;;
+  .claude/builder/*|.claude/specs/*) exit 0 ;;
+  .claude/explorer/MEMORY.md|.claude/explorer/index.json|.claude/explorer/TRACK.md|.claude/explorer/map/*) exit 0 ;;
 esac
 
 PLAN="$(bd_plan)"
@@ -50,8 +69,15 @@ SCOPE="$(awk '
 ' "$PLAN" 2>/dev/null)"
 
 if [ -z "$SCOPE" ]; then
-  bd_warn "PLAN.md has no parseable '## Scope' file list — cannot verify $REL is in scope (advisory)."
-  exit 0
+  # (A) FAIL CLOSED. Previously this WARNED and `exit 0` (allowed the edit) — a fail-open: a
+  # broken/empty Scope was MORE permissive than a valid one (a valid Scope blocks out-of-scope
+  # edits UNCONDITIONALLY via the bd_block below). A PLAN.md whose Scope can't be parsed must be
+  # NO MORE permissive than one that can, so we block here too. Unconditional (NOT gated on
+  # bd_enforce) to match that out-of-scope block — the "PLAN.md exists" regime enforces scope
+  # regardless of enforce mode; only the separate "no PLAN.md at all" case is advisory.
+  # PLAN.md itself (and the rest of .claude/builder/*) stays editable via the always-allow zone
+  # above, so the user can ADD a Scope section to recover.
+  bd_block "BLOCKED: .claude/builder/PLAN.md exists but has no parseable '## Scope' file list, so $REL cannot be verified as in scope (a broken Scope must not be more permissive than a valid one). Add a '## Scope' section listing the repo-relative files this change may touch — PLAN.md itself stays editable so you can fix it — then retry."
 fi
 
 # membership check: repo-relative path equality (with a './' prefix tolerance).
