@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "reviewer",
+  "displayName": "Change Reviewer",
+  "version": "0.1.0",
+  "description": "Reviews a CHANGE (the working-tree diff vs HEAD) against the explorer MEMORY.md invariants and risk map, the approved PLAN scope, and the codebase's surviving callers. Deterministic, pure-shell/awk checks (R1 caller-integrity, R2 convention-regression — BLOCKING; R3 risk-touch, R4 scope-discipline — CONCERN) plus breadth+depth review sub-agents. Emits BLOCKING/CONCERN/NOTE findings to .claude/reviewer/REVIEW.md and records a BLOCKING count in the STATUS contract so the pipeline release gate can enforce 0-blocking. Orthogonal to the auditor (change-vs-invariants, not whole-tree regression). Silent on a clean/in-spec change; no python dependency.",
+  "author": {
+    "name": "hafizmirhamza276-lab",
+    "email": "hafizmirhamza276@gmail.com"
+  },
+  "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "license": "MIT",
+  "keywords": ["review", "code-review", "invariants", "risk", "callers", "scope", "release-gate", "backend", "agentic", "status-contract"]
+}

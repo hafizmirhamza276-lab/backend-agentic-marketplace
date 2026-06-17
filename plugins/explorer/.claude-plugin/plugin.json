@@ -6,6 +6,5 @@
   "description": "Explore a backend codebase once with breadth (Sonnet) + depth (Opus) sub-agents, then persist a durable .claude/explorer/ memory so future sessions understand the code without re-exploring.",
   "author": { "name": "hafizmirhamza276-lab", "email": "hafizmirhamza276@gmail.com" },
   "license": "MIT",
-  "keywords": ["codebase", "exploration", "memory", "onboarding", "backend", "agentic"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["codebase", "exploration", "memory", "onboarding", "backend", "agentic"]
 }

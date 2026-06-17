@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "pipeline",
+  "displayName": "Pipeline Conductor",
+  "version": "0.1.0",
+  "description": "Conductor plugin that sequences the explorer -> builder flow and gates it behind a deterministic RELEASE GATE. Reads the per-module STATUS contract and durable memory, runs exploration first when memory is missing or stale, then the spec-driven build (or BUG-FIX MODE), then verifies release-readiness (fresh memory, builder done with full coverage map, bug-fix net green, changelog present, auditor 0-high when present). Advisory by default; enforce via settings.enforce_release or PIPELINE_ENFORCE=1. Pure shell/awk gate — no python dependency.",
+  "author": {
+    "name": "hafizmirhamza276-lab",
+    "email": "hafizmirhamza276@gmail.com"
+  },
+  "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "license": "MIT",
+  "keywords": ["conductor", "orchestrator", "release-gate", "pipeline", "backend", "agentic", "status-contract"]
+}

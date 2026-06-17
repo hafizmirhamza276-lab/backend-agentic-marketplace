@@ -10,6 +10,69 @@ ground truth, gates the plan (clarity + technical plan, 9/10 each), implements o
 spec says, runs hybrid QA, and keeps the durable memory in sync — plus a reproduce-first
 **bug-fix mode** that turns vague, repro-less bug reports into verified, regression-safe fixes.
 
+## Ecosystem
+
+Six plugins compose into a single **"1–2 command → prod-ready"** pipeline — five do the work, the
+sixth conducts them. Each module writes a small machine-readable `STATUS.json` under
+`.claude/<module>/`, and the conductor reads those summaries instead of re-deriving anything.
+
+| Plugin | Role (one line) |
+|---|---|
+| **`explorer`** | Explore a backend codebase **once**; persist a durable `.claude/explorer/` memory so later sessions recall (what / why / how) instead of re-scanning. |
+| **`builder`** | Spec-driven, gated implementation against that memory (plan → implement → hybrid QA → memory-sync), plus reproduce-first **bug-fix mode**. |
+| **`auditor`** | Deterministic **F1–F13** regression detectors + breadth/depth sub-agents; records a `high` count the release gate enforces (**0-high**). |
+| **`reviewer`** | Reviews *this change* (diff vs HEAD) against the recorded invariants/risk map, the approved scope, and surviving callers; records a `blocking` count (**0-blocking**). |
+| **`ops`** | Deploy/release readiness — a build/test ledger + version-consistency + deploy/observability sub-agents; records a `blocking` count (**0-blocking**). |
+| **`pipeline`** | The **conductor**: sequences the five above and renders the deterministic release verdict. It explores/builds nothing itself — it coordinates and gates. |
+
+Install any subset from the same marketplace (the conductor uses whichever modules are present —
+absent ones simply SKIP in the gate):
+
+```bash
+/plugin marketplace add hafizmirhamza276-lab/backend-agentic-marketplace
+/plugin install explorer@backend-agentic-marketplace
+/plugin install builder@backend-agentic-marketplace
+/plugin install auditor@backend-agentic-marketplace
+/plugin install reviewer@backend-agentic-marketplace
+/plugin install ops@backend-agentic-marketplace
+/plugin install pipeline@backend-agentic-marketplace
+```
+
+### Quickstart — one or two commands
+
+With the plugins installed, conduct an entire change or fix from a single command. The conductor
+runs each module in order and reads back only short STATUS summaries (protecting its own context):
+
+```bash
+/pipeline:run "<spec or short note>"   # change: explore → build → audit → review → ops → release-gate
+/pipeline:fix "<bug symptom>"          # bug:    same sequence, but the build runs reproduce-first BUG-FIX MODE
+/pipeline:status                       # cheap consolidated dashboard (no sub-agents)
+```
+
+If the explorer memory is missing or stale, `/pipeline:run` bootstraps exploration first; if it
+needs a spec, it asks you to write one. It **stops and reports** the moment a gate blocks.
+
+### What "prod-ready" means — the release gate
+
+Both commands end at the deterministic **release gate**
+(`plugins/pipeline/scripts/verify-release.sh` — pure shell/awk, no python dependency). It
+aggregates **seven** checks from the modules' STATUS + artifacts and renders **RELEASE READY** only
+when none fail:
+
+1. **explorer** memory present **and fresh** (`explored_commit == git HEAD`);
+2. **builder** done, and — if a `PLAN.md` exists — **every** `## Tasks` item has a coverage-map line in `CHANGELOG.md`;
+3. **bug-fix net** green when a `BUG.md` exists (repro red→green + characterization/linked green);
+4. **auditor** `high == 0` *(SKIP — advisory — when the auditor hasn't run)*;
+5. **CHANGELOG.md** present and non-empty;
+6. **reviewer** `blocking == 0` *(SKIP when absent)*;
+7. **ops** `blocking == 0` *(SKIP when absent)*.
+
+Advisory by default (it reports and exits 0); under `PIPELINE_ENFORCE=1` (or
+`.claude/pipeline/settings.json` → `"enforce_release": true`) it **hard-blocks** (exit 2) on any
+required failure and writes the verdict + table to `.claude/pipeline/RELEASE.md`. The verdict is
+honest — a SKIP means that module is advisory/absent, not that it passed — and confidence is never
+stated as "100%".
+
 ## How to install
 
 In Claude Code, add the marketplace and install the plugins:

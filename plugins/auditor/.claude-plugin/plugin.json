@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "auditor",
+  "displayName": "Codebase Auditor",
+  "version": "0.1.0",
+  "description": "Productizes this marketplace's own audit methodology (the F1–F13 failure classes) as deterministic, pure-shell/awk REGRESSION detectors plus breadth+depth review sub-agents. Scans every plugin's hooks, guards, manifests, and vendored libs; emits HIGH/MEDIUM/LOW/ADVISORY findings to .claude/auditor/FINDINGS.md; and records a HIGH count in the STATUS contract so the pipeline release gate can enforce 0-high. Silent on a clean tree, fires only on a regression. No python dependency — identical on python-less / Windows hosts.",
+  "author": {
+    "name": "hafizmirhamza276-lab",
+    "email": "hafizmirhamza276@gmail.com"
+  },
+  "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "license": "MIT",
+  "keywords": ["audit", "security", "regression", "static-analysis", "release-gate", "backend", "agentic", "status-contract"]
+}

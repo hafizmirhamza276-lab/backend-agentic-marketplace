@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "backend-agentic-marketplace",
   "version": "0.1.0",
-  "description": "Agentic backend-engineering plugins for Claude Code. Plugin #1: explorer (explore-once, understand-forever codebase memory). Plugin #2: builder (spec-driven agentic implementation with gates and memory sync).",
+  "description": "Agentic backend-engineering plugins for Claude Code. Plugin #1: explorer (explore-once, understand-forever codebase memory). Plugin #2: builder (spec-driven agentic implementation with gates and memory sync). Plugin #3: pipeline (conductor that sequences explorer -> builder and gates a release behind a deterministic, python-free release gate).",
   "owner": {
     "name": "hafizmirhamza276-lab",
     "email": "hafizmirhamza276@gmail.com",
@@ -26,6 +26,38 @@
       "description": "Spec-driven agentic implementation for Claude Code. Reads explorer codebase memory as ground truth, plans a requested change with clarity + technical-plan gates (9/10 required), implements only what the spec says, runs hybrid QA, and keeps the durable memory in sync. Includes a reproduce-first BUG-FIX MODE (failing reproduction + characterization tests + deterministic regression gate) for vague, repro-less bug reports.",
       "version": "0.4.0",
       "category": "code-implementation",
+      "author": { "name": "hafizmirhamza276-lab" }
+    },
+    {
+      "name": "pipeline",
+      "source": "./plugins/pipeline",
+      "description": "Conductor plugin: sequences the explorer -> builder flow (running exploration first when memory is missing/stale, then the spec-driven build or BUG-FIX MODE) and gates the result behind a deterministic RELEASE GATE — fresh explorer memory, builder done with a full task coverage map, bug-fix verification net green, CHANGELOG present, and (when present) auditor 0-high. Advisory by default; enforce via settings.enforce_release or PIPELINE_ENFORCE=1. The gate is pure shell/awk, so it behaves identically on python-less / Windows hosts.",
+      "version": "0.1.0",
+      "category": "orchestration",
+      "author": { "name": "hafizmirhamza276-lab" }
+    },
+    {
+      "name": "auditor",
+      "source": "./plugins/auditor",
+      "description": "Audits this marketplace against its own F1–F13 failure classes: deterministic pure-shell/awk regression detectors (fail-open, path traversal, broken hook contracts, manifest + vendored-lib drift, notebook/stdin/timeout/line-ending gaps) plus breadth+depth review sub-agents. Writes .claude/auditor/FINDINGS.md and records a HIGH count in the STATUS contract so the pipeline release gate enforces 0-high. Silent on a clean tree; no python dependency.",
+      "version": "0.1.0",
+      "category": "code-quality",
+      "author": { "name": "hafizmirhamza276-lab" }
+    },
+    {
+      "name": "reviewer",
+      "source": "./plugins/reviewer",
+      "description": "Reviews a CHANGE (the working-tree diff vs HEAD) against the explorer MEMORY.md invariants and risk map, the approved PLAN scope, and the codebase's surviving callers. Deterministic pure-shell/awk checks — R1 caller-integrity & R2 convention-regression (BLOCKING), R3 risk-touch & R4 scope-discipline (CONCERN) — plus breadth+depth review sub-agents. Writes .claude/reviewer/REVIEW.md and records a BLOCKING count in the STATUS contract so the pipeline release gate enforces 0-blocking. Orthogonal to the auditor (change-vs-invariants, not whole-tree regression). Silent on a clean/in-spec change; no python dependency.",
+      "version": "0.1.0",
+      "category": "code-quality",
+      "author": { "name": "hafizmirhamza276-lab" }
+    },
+    {
+      "name": "ops",
+      "source": "./plugins/ops",
+      "description": "Assesses DEPLOY/RELEASE readiness of the codebase. Deterministic pure-shell/awk checks kept deliberately lean — O1 test-ledger (a recorded RED build/test → BLOCKING; no ledger → CONCERN) and O2 version-consistency (a marketplace entry's version ≠ that plugin's plugin.json version → CONCERN) — plus breadth+depth ops sub-agents that inventory the CI/deploy/observability surface and reason about readiness as advisory CONCERN/NOTE findings. Writes .claude/ops/OPS.md and records a BLOCKING count in the STATUS contract so the pipeline release gate enforces 0-blocking. Fuzzy deploy judgment lives in the agents, never a false-firing detector. Silent on a verified, consistent tree; no python dependency.",
+      "version": "0.1.0",
+      "category": "release-ops",
       "author": { "name": "hafizmirhamza276-lab" }
     }
   ]

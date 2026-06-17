@@ -166,9 +166,44 @@ symptom (vague, repro-less)
   produced by the gate itself when `auto_run_tests="auto"`. Running tests is side-effectful, so the
   orchestrator proposes commands and confirms before any run.
 
-## Roadmap slots (the other 3–4 plugins)
-The marketplace is ready to hold siblings that all read the same memory:
-- `builder` — implements changes using the explorer memory as ground truth.
-- `reviewer` — reviews diffs against invariants/risks recorded in MEMORY.md.
-- `ops` — runtime/deploy/observability tasks.
-Each would be a folder under `plugins/` plus one entry in `.claude-plugin/marketplace.json`.
+## The ecosystem (built) — five modules + a conductor
+What were roadmap slots are now **built plugins**, all reading the same `.claude/explorer/` memory
+and composing through the STATUS contract (below):
+- `explorer` — explore once; durable codebase memory (this document's core).
+- `builder` — implements changes using the explorer memory as ground truth (above).
+- `auditor` — deterministic **F1–F13** regression detectors + breadth/depth sub-agents; records a
+  `high` count.
+- `reviewer` — reviews *this change* (diff vs HEAD) against the MEMORY.md invariants/risk map, the
+  approved scope, and surviving callers; records a `blocking` count.
+- `ops` — deploy/release-readiness (build/test ledger + version consistency + deploy/observability
+  sub-agents); records a `blocking` count.
+- `pipeline` — the **conductor**: sequences explore → build → audit → review → ops and renders the
+  release verdict. It does no exploring/building itself.
+
+Each is a folder under `plugins/` plus one entry in `.claude-plugin/marketplace.json`, and each
+vendors a byte-identical copy of `shared/lib/common.sh` (kept in sync by `scripts/sync-shared.sh`,
+verified by `scripts/check-shared-sync.sh`).
+
+## The STATUS contract + the release gate (how the modules compose)
+The modules never call each other; they communicate through two durable channels under the user's
+repo, so the conductor reads short machine-readable state instead of re-deriving anything:
+- **STATUS contract** — each module writes `${CLAUDE_PROJECT_DIR}/.claude/<module>/STATUS.json` via
+  `bd_status_write` (a fixed `module / phase / state / commit / coverage / updated_at` schema plus
+  trailing `key=value` extras — e.g. auditor `high=`, reviewer/ops `blocking=`), read back with
+  `bd_status_read`. Both the python and the pure-shell writers emit byte-identical JSON and degrade
+  gracefully when python is absent, so the contract round-trips on a python-less / Windows host.
+- **Durable artifacts** — `MEMORY.md`, the builder's `PLAN.md` / `CHANGELOG.md` / `BUG.md`, the
+  auditor's `FINDINGS.md`, the reviewer's `REVIEW.md`, the ops `OPS.md`, and the gate's `RELEASE.md`.
+
+The **release gate** (`plugins/pipeline/scripts/verify-release.sh`, pure shell/awk — no python
+dependency) is where it all converges. It aggregates **seven** checks — explorer freshness · builder
+done + full task coverage · bug-fix net (only when a `BUG.md` exists) · auditor `high == 0` ·
+CHANGELOG present · reviewer `blocking == 0` · ops `blocking == 0` — into one **RELEASE READY /
+BLOCKED** verdict, written to `.claude/pipeline/RELEASE.md` alongside `bd_status_write pipeline
+release <done|failed>`. The auditor/reviewer/ops checks are **SKIP-when-absent** (advisory): a
+module that hasn't run never fails the release, so the gate is purely additive — adding a module
+only ever adds a check. Advisory by default; `PIPELINE_ENFORCE=1` / `settings.enforce_release` makes
+any required failure hard-block (exit 2). The end-to-end "1–2 command → prod-ready" promise is proven
+by `tests/e2e-ladder.sh`: a green-path fixture where all seven checks PASS, eight single-mutation
+negatives that each block with the right reason, the consolidated dashboard, and a verdict mutation
+sentinel.
