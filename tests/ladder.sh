@@ -269,7 +269,7 @@ echo ""
 tlog "tier3 start"; echo "-- tier 3: INTEGRATION release gate --"
 PASSP=$(mkproj rel_pass); fresh_mem "$PASSP"; mkdir -p "$PASSP/.claude/builder"
 printf '# Plan\nClarity: 9/10\n## Scope\n- src/a.py\n## Tasks\n### Task 1 — do thing\nEdge cases:\n- none\nDefinition of Done: works\n' > "$PASSP/.claude/builder/PLAN.md"
-printf '# Changelog\n### Task 1 — edge-case coverage map\n- nil -> handled at src/a.py:10\n' > "$PASSP/.claude/builder/CHANGELOG.md"
+printf '# Changelog\n### Task 1 — edge-case coverage\n- nil -> handled at src/a.py:10\n' > "$PASSP/.claude/builder/CHANGELOG.md"
 ST=$(mkproj rel_stale); stale_mem "$ST"; mkdir -p "$ST/.claude/builder"; printf '# c\n' > "$ST/.claude/builder/CHANGELOG.md"
 ND=$(mkproj rel_nd); fresh_mem "$ND"; mkdir -p "$ND/.claude/builder"; printf '# c\n' > "$ND/.claude/builder/CHANGELOG.md"
 BR=$(mkproj rel_bug); fresh_mem "$BR"; mkdir -p "$BR/.claude/builder/bugfix"; printf '# c\n' > "$BR/.claude/builder/CHANGELOG.md"
@@ -600,6 +600,73 @@ TR2JSON=$(printf '{"tool_input":{"file_path":"%s/.claude/explorer/evil.md"}}' "$
 ro_real=0; printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$GUARD_READONLY"                >/dev/null 2>&1 || ro_real=$?
 ro_mut=0;  printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$MRO/scripts/guard-readonly.sh" >/dev/null 2>&1 || ro_mut=$?
 if [ "$ro_real" = 2 ] && [ "$ro_mut" = 0 ]; then ok "T9 Defect-#3 sentinel: real BLOCKS(2), mutant PASSES(0) -> \$ZONE prefix anchor load-bearing"; else bad "T9 Defect-#3 sentinel" "real=$ro_real(want 2) mut=$ro_mut(want 0)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 10 — REGRESSION: the release-gate coverage check requires a STRUCTURED per-task marker.
+# An external review found the old coverage_gaps treated ANY casual `Task <id>` mention in
+# CHANGELOG.md as coverage, so a stray prose line ("Task 1 was tricky") satisfied the gate with no
+# real coverage map. The fix counts a PLAN task as covered ONLY when the CHANGELOG carries the
+# STRUCTURED header the builder's apply-change skill emits (### Task <id> — edge-case coverage):
+#   TC1 (the fix) prose-only mention -> GAP -> gate BLOCKS (this PASSED wrongly before the fix);
+#   TC2 (control) structured marker for every task -> coverage PASSES -> READY;
+#   TC3 (whole-token) a `Task 10` marker does NOT satisfy `Task 1`;
+#   TC4 (sentinel) reverting the parser to the loose mention makes TC1 PASS the mutant -> the
+#       structured-marker requirement is load-bearing, not vacuous.
+# Only the coverage check (#2) can fail here: no BUG.md and no auditor/reviewer/ops STATUS -> those
+# rows SKIP, and a non-empty CHANGELOG passes check #5, so a BLOCK isolates the coverage verdict.
+# ===========================================================================
+tlog "tier10 start"; echo "-- tier 10: REGRESSION coverage requires a STRUCTURED per-task marker --"
+# cov_fix <name> : fresh explorer memory + builder STATUS done + empty .claude/builder. Prints dir.
+cov_fix() {
+  _d=$(mkproj "$1"); fresh_mem "$_d"; mkdir -p "$_d/.claude/builder"
+  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+  printf '%s' "$_d"
+}
+
+# TC1 (the fix) — a bare prose "Task 1" mention, NO structured marker -> Task 1 is a GAP ->
+# builder-finished FAILS -> gate BLOCKS (exit 2). This PASSED (wrongly) before the fix.
+TC1=$(cov_fix t10_tc1)
+printf '# Plan\n## Tasks\n### Task 1 — do thing\n' > "$TC1/.claude/builder/PLAN.md"
+printf '# Changelog\nTask 1 was tricky to implement.\n' > "$TC1/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC1" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC1 prose-only mention -> gate BLOCKS (exit 2)" 2 "$rc"
+release_md_has "$TC1" "missing CHANGELOG coverage" && ok "T10 TC1 RELEASE.md cites the coverage gap" || bad "T10 TC1 reason" "no coverage-gap reason"
+release_md_has "$TC1" "Required failures: 1" && ok "T10 TC1 coverage is the SOLE blocker (1 required failure)" || bad "T10 TC1 isolation" "coverage not the only failure"
+
+# TC2 (control) — a proper structured marker for every PLAN task -> coverage PASSES -> READY.
+# (The full all-seven-checks-PASS green path is proven by the e2e capstone, tier 1.)
+TC2=$(cov_fix t10_tc2)
+printf '# Plan\n## Tasks\n### Task 1 — do thing\n### Task 2 — do other\n' > "$TC2/.claude/builder/PLAN.md"
+printf '# Changelog\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n### Task 2 — edge-case coverage\n- nil -> handled at b:1\n' > "$TC2/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC2" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC2 structured markers -> gate READY (exit 0)" 0 "$rc"
+release_md_has "$TC2" "RELEASE READY" && ok "T10 TC2 RELEASE.md reads RELEASE READY" || bad "T10 TC2 verdict" "not RELEASE READY"
+
+# TC3 (whole-token) — a marker for `Task 10` must NOT satisfy `Task 1`.
+TC3a=$(cov_fix t10_tc3a)
+printf '# Plan\n## Tasks\n### Task 1 — do thing\n' > "$TC3a/.claude/builder/PLAN.md"
+printf '# Changelog\n### Task 10 — edge-case coverage\n- nil -> handled at a:1\n' > "$TC3a/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC3a" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC3 'Task 10' marker does NOT cover 'Task 1' (exit 2)" 2 "$rc"
+release_md_has "$TC3a" "missing CHANGELOG coverage" && ok "T10 TC3 RELEASE.md cites the Task 1 gap" || bad "T10 TC3 reason" "no coverage-gap reason"
+# control: the SAME `Task 10` marker DOES cover a PLAN `Task 10` -> proves TC3a is a whole-token
+# mismatch (not the marker going unrecognized).
+TC3b=$(cov_fix t10_tc3b)
+printf '# Plan\n## Tasks\n### Task 10 — do thing\n' > "$TC3b/.claude/builder/PLAN.md"
+printf '# Changelog\n### Task 10 — edge-case coverage\n- nil -> handled at a:1\n' > "$TC3b/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC3b" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC3 (control) 'Task 10' marker DOES cover 'Task 10' (exit 0)" 0 "$rc"
+
+# TC4 MUTATION SENTINEL — revert the coverage parser to the loose `Task <id>` mention (sed the
+# #COVERAGE_MARKER_RE line) and prove TC1's prose-only fixture now PASSES the mutant while the REAL
+# gate still BLOCKS it -> the structured-marker requirement is load-bearing, not vacuous.
+MCOV="$WORK/mut_coverage"; mkdir -p "$MCOV/scripts" "$MCOV/lib"; cp "$LIB" "$MCOV/lib/common.sh"
+sed 's|.*#COVERAGE_MARKER_RE.*|        if (line ~ /[Tt]ask[[:space:]]+[^[:space:]:,]+/) {|' "$VERIFY_RELEASE" > "$MCOV/scripts/verify-release.sh"
+cov_real=0; CLAUDE_PROJECT_DIR="$TC1" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE"                >/dev/null 2>&1 || cov_real=$?
+cov_mut=0;  CLAUDE_PROJECT_DIR="$TC1" PIPELINE_ENFORCE=1 bash "$MCOV/scripts/verify-release.sh" >/dev/null 2>&1 || cov_mut=$?
+if [ "$cov_real" = 2 ] && [ "$cov_mut" = 0 ]; then ok "T10 TC4 sentinel: real BLOCKS(2), loose mutant PASSES(0) -> structured-marker requirement load-bearing"; else bad "T10 TC4 sentinel" "real=$cov_real(want 2) mut=$cov_mut(want 0)"; fi
+if ! cmp -s "$VERIFY_RELEASE" "$MCOV/scripts/verify-release.sh"; then ok "T10 TC4 mutant differs from the real gate (sed applied)"; else bad "T10 TC4 mutant" "sed was a no-op — sentinel would be vacuous"; fi
 echo ""
 
 # ===========================================================================

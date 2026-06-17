@@ -73,9 +73,11 @@ build_green() {
   mkdir -p "$d/.claude/explorer" "$d/.claude/builder/bugfix"
   # explorer — fresh memory (explored_commit pinned to this fixture's HEAD).
   { printf 'explored_commit: %s\n' "$HEAD_FULL"; printf 'coverage: 90%%\n'; } > "$d/.claude/explorer/MEMORY.md"
-  # builder — PLAN with two atomic tasks, both covered in the CHANGELOG.
+  # builder — PLAN with two atomic tasks, both covered in the CHANGELOG. Coverage is proven by
+  # the STRUCTURED per-task header the builder emits (### Task <id> — edge-case coverage), the
+  # exact marker the gate scans for; a bare prose "Task <id>" line would NOT satisfy the gate.
   printf '# Plan\n\n## Scope\n- a\n- b\n\n## Tasks\n### Task 1: do A\n### Task 2: do B\n' > "$d/.claude/builder/PLAN.md"
-  printf '# Changelog\n\n- Task 1: did A (handled at a:1)\n- Task 2: did B (handled at b:1)\n' > "$d/.claude/builder/CHANGELOG.md"
+  printf '# Changelog\n\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n### Task 2 — edge-case coverage\n- nil -> handled at b:1\n' > "$d/.claude/builder/CHANGELOG.md"
   CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
   # bug-fix net — BUG.md present + a GREEN repro ledger, so bugfix-net PASSES (not SKIPs).
   printf '# Bug Brief\nSymptom: x\nRepro status: GREEN\n' > "$d/.claude/builder/BUG.md"
@@ -89,7 +91,7 @@ build_green() {
 # --- the eight single-mutation flips (each takes the fixture dir) -------------
 flip_a() { printf 'explored_commit: %s\ncoverage: 90%%\n' 0000000000000000000000000000000000000000 > "$1/.claude/explorer/MEMORY.md"; }  # stale
 flip_b() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write builder qa running' >/dev/null 2>&1 || true; }                       # not done
-flip_c() { printf '# Changelog\n\n- Task 1: did A (handled at a:1)\n' > "$1/.claude/builder/CHANGELOG.md"; }                                # Task 2 uncovered
+flip_c() { printf '# Changelog\n\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n' > "$1/.claude/builder/CHANGELOG.md"; }          # Task 2 marker removed -> uncovered
 flip_d() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write auditor  audit     done "" high=1 med=0 low=0'   >/dev/null 2>&1 || true; }
 flip_e() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=1 concern=0' >/dev/null 2>&1 || true; }
 flip_f() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write ops      readiness done "" blocking=1 concern=0' >/dev/null 2>&1 || true; }

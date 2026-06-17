@@ -52,8 +52,13 @@ For each task:
   - spec id, plan step(s) / task id(s) implemented, exact files + functions touched
     (path:line), new/changed tests, and anything that diverged from the plan and why.
 - Append a per-task **edge-case coverage map** to `.claude/builder/CHANGELOG.md` (when
-  `micro_decomposition` is on). Every enumerated edge case gets exactly one line — **no
-  silent skips**:
+  `micro_decomposition` is on). Lead each task's map with the **structured coverage header**
+  below, verbatim — emit **one `### Task <id> — edge-case coverage` header per PLAN task id**.
+  This exact H3 header (an H3 that names `Task <id>` and contains the word `coverage`) is the
+  marker the release gate `plugins/pipeline/scripts/verify-release.sh` scans for to count a PLAN
+  task as covered; a bare in-prose "Task <id>" mention does **not** satisfy the gate, so the
+  header is mandatory, not decorative. Every enumerated edge case then gets exactly one line —
+  **no silent skips**:
   ```
   ### Task <id> — edge-case coverage
   - <case> → handled at <file:line>
