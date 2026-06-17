@@ -11,6 +11,5 @@
   "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "license": "MIT",
-  "keywords": ["spec-driven", "agentic", "implementation", "backend", "codebase-memory", "qa", "edge-cases", "decomposition", "bug-fix", "reproduce-first", "regression-gate"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["spec-driven", "agentic", "implementation", "backend", "codebase-memory", "qa", "edge-cases", "decomposition", "bug-fix", "reproduce-first", "regression-gate"]
 }

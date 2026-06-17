@@ -11,6 +11,5 @@
   "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
   "license": "MIT",
-  "keywords": ["audit", "security", "regression", "static-analysis", "release-gate", "backend", "agentic", "status-contract"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["audit", "security", "regression", "static-analysis", "release-gate", "backend", "agentic", "status-contract"]
 }

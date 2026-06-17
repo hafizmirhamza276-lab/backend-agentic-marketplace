@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "ops",
+  "displayName": "Deploy Readiness",
+  "version": "0.1.0",
+  "description": "Assesses DEPLOY/RELEASE readiness of the codebase. Deterministic, pure-shell/awk checks kept deliberately LEAN — O1 test-ledger (a recorded RED build/test → BLOCKING; no ledger → CONCERN) and O2 version-consistency (a marketplace entry's version ≠ that plugin's plugin.json version → CONCERN) — plus breadth+depth ops sub-agents that inventory the CI/deploy/observability surface and reason about readiness as ADVISORY CONCERN/NOTE findings. Emits BLOCKING/CONCERN/NOTE to .claude/ops/OPS.md and records a BLOCKING count in the STATUS contract so the pipeline release gate can enforce 0-blocking. Fuzzy deploy judgment lives in the agents, never in a false-firing detector. Silent on a verified, consistent tree; no python dependency.",
+  "author": {
+    "name": "hafizmirhamza276-lab",
+    "email": "hafizmirhamza276@gmail.com"
+  },
+  "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "license": "MIT",
+  "keywords": ["ops", "deploy", "release", "readiness", "ci", "observability", "release-gate", "backend", "agentic", "status-contract"]
+}

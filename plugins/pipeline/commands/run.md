@@ -41,22 +41,50 @@ scripts — your judgment sits on top of them, not instead of them.
    `state == done`. Treat any non-`done` builder STATUS as **not finished** — do not
    advance to the release gate; surface what's blocking and stop.
 
+## Phase 2.5 — Review the change (reviewer, before the gate)
+6. Run the **reviewer flow** (`/reviewer:run`) on what the builder just changed — AFTER the build,
+   BEFORE the release gate. It reviews the diff vs HEAD against the explorer `MEMORY.md`
+   invariants/risk map, the approved `PLAN.md` scope, and surviving callers; it writes
+   `.claude/reviewer/REVIEW.md` and records
+   `bd_status_write reviewer review <done|failed> "" blocking=$B concern=$C`. Honor its gate
+   without shortcut: a BLOCKING finding is a real breakage. Treat a `failed` reviewer STATUS as
+   **not finished** — surface what broke and let the gate enforce 0-blocking; weigh any CONCERNs.
+   The reviewer is orthogonal to the auditor — both verdicts feed the gate independently.
+
+## Phase 2.6 — Assess deploy/release readiness (ops, before the gate)
+6b. Run the **ops flow** (`/ops:run`) — AFTER the reviewer, BEFORE the release gate, so the full
+   sequence is explore → build → audit → review → ops → release-gate. It assesses deploy/release
+   readiness: it (with your confirmation) records a build/test ledger and runs the deterministic
+   checks — O1 test-ledger (a recorded RED build/test → BLOCKING; no ledger → CONCERN) and O2
+   version-consistency — then adds advisory deploy/observability findings from its sub-agents. It
+   writes `.claude/ops/OPS.md` and records
+   `bd_status_write ops readiness <done|failed> "" blocking=$B concern=$C`. Honor its gate without
+   shortcut: a BLOCKING means the codebase is provably not releasable (a failed build/test). Treat a
+   `failed` ops STATUS as **not finished** — surface what's red and let the gate enforce 0-blocking;
+   weigh any CONCERNs. Ops is orthogonal to the auditor and the reviewer — all three verdicts feed
+   the gate independently.
+
 ## Phase 3 — Release gate (deterministic)
-6. Invoke the gate: `"${CLAUDE_PLUGIN_ROOT}"/scripts/verify-release.sh`. It is pure
+7. Invoke the gate: `"${CLAUDE_PLUGIN_ROOT}"/scripts/verify-release.sh`. It is pure
    shell/awk, writes `.claude/pipeline/RELEASE.md`, and records
    `bd_status_write pipeline release <done|failed>`. Read the PASS/FAIL table it prints.
-7. Advisory by default; under `PIPELINE_ENFORCE=1` / `settings.enforce_release=true` it
+   When reviewer, ops, and/or auditor STATUS is present, the gate requires reviewer `blocking == 0`
+   and ops `blocking == 0` (and auditor `high == 0`); when absent, those checks SKIP (advisory) and
+   do not block.
+8. Advisory by default; under `PIPELINE_ENFORCE=1` / `settings.enforce_release=true` it
    exits 2 on any REQUIRED failure. **Regardless of mode, a `failed` release STATUS is a
    hard stop.**
 
 ## Phase 4 — Report (honest)
-8. **If the gate passes:** write a short release report — what was built, files changed
+9. **If the gate passes:** write a short release report — what was built, files changed
    (paths), QA mode + score, and the release verdict + any advisory notes (e.g. "auditor:
-   not run") from `RELEASE.md`. State an honest confidence; never "100%".
-9. **If the gate fails:** **STOP**. Report the exact failing checks from `RELEASE.md` and
+   not run", "reviewer: not run", "ops: not run") from `RELEASE.md`. State an honest confidence;
+   never "100%".
+10. **If the gate fails:** **STOP**. Report the exact failing checks from `RELEASE.md` and
    the single next action to clear each (e.g. "re-run /explorer:start — memory is stale";
-   "builder not done — finish QA"; "add the missing task's coverage line"). Do not claim
-   the change is releasable.
+   "builder not done — finish QA"; "reviewer BLOCKING — fix the broken caller"; "ops BLOCKING —
+   make the failing test green and re-record the ledger"; "add the missing task's coverage line").
+   Do not claim the change is releasable.
 
 ### Standing rules
 - STATUS-driven and precise: read `bd_status_read <module> <key>` + the artifacts; don't

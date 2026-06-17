@@ -22,6 +22,10 @@
 #   4. auditor (ADVISORY when absent / extensible): if auditor STATUS exists, require 0 high;
 #      if absent, report "not run" and do NOT fail
 #   5. CHANGELOG.md present and non-empty
+#   6. reviewer (ADVISORY when absent / extensible): if reviewer STATUS exists, require 0 blocking
+#      AND state != failed; if absent, report "not run" and do NOT fail (mirrors the auditor check)
+#   7. ops (ADVISORY when absent / extensible): if ops STATUS exists, require 0 blocking AND
+#      state != failed; if absent, report "not run" and do NOT fail (mirrors the reviewer check)
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
@@ -180,6 +184,48 @@ if [ -s "$LOG" ]; then
   record "changelog" PASS 1 "CHANGELOG present and non-empty"
 else
   record "changelog" FAIL 1 "CHANGELOG: missing or empty (.claude/builder/CHANGELOG.md)"
+fi
+
+# ---------------------------------------------------------------------------
+# 6) reviewer (extensible) — advisory when absent, required (0 blocking) when present.
+# Mirrors the auditor check (4): a change-vs-invariants/callers/scope review records a BLOCKING
+# count; require 0 blocking and a non-failed state to release. Absent -> SKIP (does not block), so
+# this addition is purely additive and leaves every prior fixture's verdict unchanged.
+# ---------------------------------------------------------------------------
+REV="$(bd_claude_dir)/reviewer/STATUS.json"
+if [ ! -f "$REV" ]; then
+  record "reviewer" SKIP 0 "reviewer: not run (advisory — does not block release)"
+else
+  RSTATE="$(bd_status_read reviewer state 2>/dev/null || true)"
+  RBLOCK="$(bd_status_read reviewer blocking 2>/dev/null || true)"   # reviewer records a 'blocking' count
+  if [ -n "$RBLOCK" ] && [ "$RBLOCK" != "0" ]; then
+    record "reviewer" FAIL 1 "reviewer: $RBLOCK BLOCKING finding(s) — must be 0 to release"
+  elif [ "$RSTATE" = "failed" ] || [ "$RSTATE" = "blocked" ]; then
+    record "reviewer" FAIL 1 "reviewer: STATUS state='$RSTATE'"
+  else
+    record "reviewer" PASS 1 "reviewer: state='${RSTATE:-?}', 0 blocking"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 7) ops (extensible) — advisory when absent, required (0 blocking) when present.
+# Mirrors the reviewer check (6): a deploy/release-readiness assessment records a BLOCKING count;
+# require 0 blocking and a non-failed state to release. Absent -> SKIP (does not block), so this
+# addition is purely additive and leaves every prior fixture's verdict unchanged.
+# ---------------------------------------------------------------------------
+OPS="$(bd_claude_dir)/ops/STATUS.json"
+if [ ! -f "$OPS" ]; then
+  record "ops" SKIP 0 "ops: not run (advisory — does not block release)"
+else
+  OSTATE="$(bd_status_read ops state 2>/dev/null || true)"
+  OBLOCK="$(bd_status_read ops blocking 2>/dev/null || true)"   # ops records a 'blocking' count
+  if [ -n "$OBLOCK" ] && [ "$OBLOCK" != "0" ]; then
+    record "ops" FAIL 1 "ops: $OBLOCK BLOCKING finding(s) — must be 0 to release"
+  elif [ "$OSTATE" = "failed" ] || [ "$OSTATE" = "blocked" ]; then
+    record "ops" FAIL 1 "ops: STATUS state='$OSTATE'"
+  else
+    record "ops" PASS 1 "ops: state='${OSTATE:-?}', 0 blocking"
+  fi
 fi
 
 # --- verdict -----------------------------------------------------------------
