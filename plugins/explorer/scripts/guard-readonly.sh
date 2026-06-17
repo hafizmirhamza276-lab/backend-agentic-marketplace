@@ -54,10 +54,17 @@ case "$target" in
 esac
 abs="$(bd_normalize_path "$abs")"
 
-# Allow only paths under .claude/explorer/
-if [[ "$abs" == *"/.claude/explorer/"* ]]; then
-  exit 0
-fi
+# Allow only paths strictly UNDER this project's OWN .claude/explorer/ zone. Resolve the zone
+# from bd_project_dir — the SAME base used to resolve a relative target above, so the two agree —
+# and normalize it the SAME way as $abs, then require $abs to sit under it as an anchored path
+# PREFIX. A bare substring test (the old form, *"/.claude/explorer/"*) also allowed an ABSOLUTE
+# path OUTSIDE this project that merely CONTAINED "/.claude/explorer/" (e.g. another project's
+# memory under /other/.claude/explorer/); anchoring to $ZONE closes that hole (#3).
+PROJECT="$(bd_project_dir)"
+ZONE="$(bd_normalize_path "$PROJECT/.claude/explorer")"
+case "$abs" in
+  "$ZONE"/*) exit 0 ;;
+esac
 
 echo "explorer is read-only: writes are only allowed under .claude/explorer/. Refusing to modify: $target. If you intended to change source code, switch off the explorer agent first." >&2
 exit 2

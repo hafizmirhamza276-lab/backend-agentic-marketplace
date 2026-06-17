@@ -22,12 +22,16 @@
 #      blocking=1, (g) missing CHANGELOG, (h) bug repro red. This is the gate's integrated
 #      mutation-detection: one mutation each, each independently caught.
 #   3. DASHBOARD — pipeline-status.sh on the green fixture: exit 0, never crashes (also on an EMPTY
-#      project), and reflects each module's state correctly. The script rows explorer/builder/
-#      pipeline directly; auditor/reviewer/ops readiness is consolidated by the release gate (the
-#      seven PASS rows asserted in tier 1), and their STATUS is independently confirmed here.
+#      project), and natively rows ALL SIX modules — explorer/builder/auditor/reviewer/ops/pipeline.
+#      The auxiliary gates (auditor/reviewer/ops) are rowed directly with their state + headline
+#      count (auditor high=, reviewer/ops blocking=); on an EMPTY project (absent STATUS) those
+#      rows read "not run" and the gate still exits 0.
 #   4. MUTATION SENTINEL — sed the gate's verdict line (`REQ_FAIL -eq 0` -> always-true) and prove a
 #      negative fixture (auditor high=1) flips from BLOCKED to "RELEASE READY" under the mutant ->
 #      the integrated verdict is load-bearing.
+#   5. BUILDER STOP-GATE (#6) — verify-build.sh no-PLAN handling is STATUS-aware: builder ran
+#      (STATUS state set) but PLAN.md absent -> the missing artifact is reported (blocks under
+#      enforce); no builder activity (no STATUS) -> a clean no-op (exit 0). Never crashes.
 #
 # Keeps all five existing suites green (it adds a file; it never edits a script/lib). Summary line;
 # exits nonzero on any FAIL.
@@ -39,6 +43,7 @@ export ROOT
 LIB="$ROOT/shared/lib/common.sh";                              export LIB
 VERIFY_RELEASE="$ROOT/plugins/pipeline/scripts/verify-release.sh"
 PIPE_STATUS="$ROOT/plugins/pipeline/scripts/pipeline-status.sh"
+VERIFY_BUILD="$ROOT/plugins/builder/scripts/verify-build.sh"
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf 'PASS  %s\n' "$1"; }
@@ -73,9 +78,11 @@ build_green() {
   mkdir -p "$d/.claude/explorer" "$d/.claude/builder/bugfix"
   # explorer — fresh memory (explored_commit pinned to this fixture's HEAD).
   { printf 'explored_commit: %s\n' "$HEAD_FULL"; printf 'coverage: 90%%\n'; } > "$d/.claude/explorer/MEMORY.md"
-  # builder — PLAN with two atomic tasks, both covered in the CHANGELOG.
+  # builder — PLAN with two atomic tasks, both covered in the CHANGELOG. Coverage is proven by
+  # the STRUCTURED per-task header the builder emits (### Task <id> — edge-case coverage), the
+  # exact marker the gate scans for; a bare prose "Task <id>" line would NOT satisfy the gate.
   printf '# Plan\n\n## Scope\n- a\n- b\n\n## Tasks\n### Task 1: do A\n### Task 2: do B\n' > "$d/.claude/builder/PLAN.md"
-  printf '# Changelog\n\n- Task 1: did A (handled at a:1)\n- Task 2: did B (handled at b:1)\n' > "$d/.claude/builder/CHANGELOG.md"
+  printf '# Changelog\n\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n### Task 2 — edge-case coverage\n- nil -> handled at b:1\n' > "$d/.claude/builder/CHANGELOG.md"
   CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
   # bug-fix net — BUG.md present + a GREEN repro ledger, so bugfix-net PASSES (not SKIPs).
   printf '# Bug Brief\nSymptom: x\nRepro status: GREEN\n' > "$d/.claude/builder/BUG.md"
@@ -89,7 +96,7 @@ build_green() {
 # --- the eight single-mutation flips (each takes the fixture dir) -------------
 flip_a() { printf 'explored_commit: %s\ncoverage: 90%%\n' 0000000000000000000000000000000000000000 > "$1/.claude/explorer/MEMORY.md"; }  # stale
 flip_b() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write builder qa running' >/dev/null 2>&1 || true; }                       # not done
-flip_c() { printf '# Changelog\n\n- Task 1: did A (handled at a:1)\n' > "$1/.claude/builder/CHANGELOG.md"; }                                # Task 2 uncovered
+flip_c() { printf '# Changelog\n\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n' > "$1/.claude/builder/CHANGELOG.md"; }          # Task 2 marker removed -> uncovered
 flip_d() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write auditor  audit     done "" high=1 med=0 low=0'   >/dev/null 2>&1 || true; }
 flip_e() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=1 concern=0' >/dev/null 2>&1 || true; }
 flip_f() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write ops      readiness done "" blocking=1 concern=0' >/dev/null 2>&1 || true; }
@@ -165,34 +172,35 @@ pair "(h) bug repro red"                flip_h 'reproduction not green'
 echo ""
 
 # ===========================================================================
-# TIER 3 — DASHBOARD: pipeline-status.sh reflects every module + never crashes.
+# TIER 3 — DASHBOARD: pipeline-status.sh natively rows ALL SIX modules + never crashes.
 # ===========================================================================
-echo "-- tier 3: DASHBOARD (pipeline-status.sh) --"
+echo "-- tier 3: DASHBOARD (pipeline-status.sh — all six native rows) --"
 # Refresh the pipeline verdict on the green fixture so the dashboard's pipeline row is current.
 CLAUDE_PROJECT_DIR="$G" bash "$VERIFY_RELEASE" >/dev/null 2>&1 || true
 rc=0; dout=$(CLAUDE_PROJECT_DIR="$G" bash "$PIPE_STATUS" 2>/dev/null) || rc=$?
 assert_eq "T3 dashboard exits 0 on the green fixture" 0 "$rc"
 [ -n "$dout" ] && ok "T3 dashboard prints output (never silent)" || bad "T3 dashboard output" "empty"
-# The script rows explorer/builder/pipeline directly.
-printf '%s\n' "$dout" | grep -E '^[[:space:]]*explorer' | grep -q 'current'  && ok "T3 explorer row reflects freshness=current" || bad "T3 explorer row" "no current freshness in: $dout"
-printf '%s\n' "$dout" | grep -E '^[[:space:]]*builder'  | grep -q 'done'     && ok "T3 builder row reflects state=done"       || bad "T3 builder row"  "no done state in: $dout"
-printf '%s\n' "$dout" | grep -E '^[[:space:]]*pipeline' | grep -q 'done'     && ok "T3 pipeline row reflects release=done"     || bad "T3 pipeline row" "no done state in: $dout"
-# auditor/reviewer/ops readiness is consolidated by the release gate (tier 1's seven PASS rows);
-# confirm their STATUS independently reflects the green state on the same fixture.
-a_st=$(CLAUDE_PROJECT_DIR="$G" bash -c '. "$LIB"; bd_status_read auditor  state'    2>/dev/null || true)
-a_hi=$(CLAUDE_PROJECT_DIR="$G" bash -c '. "$LIB"; bd_status_read auditor  high'     2>/dev/null || true)
-r_st=$(CLAUDE_PROJECT_DIR="$G" bash -c '. "$LIB"; bd_status_read reviewer state'    2>/dev/null || true)
-r_bl=$(CLAUDE_PROJECT_DIR="$G" bash -c '. "$LIB"; bd_status_read reviewer blocking' 2>/dev/null || true)
-o_st=$(CLAUDE_PROJECT_DIR="$G" bash -c '. "$LIB"; bd_status_read ops      state'    2>/dev/null || true)
-o_bl=$(CLAUDE_PROJECT_DIR="$G" bash -c '. "$LIB"; bd_status_read ops      blocking' 2>/dev/null || true)
-[ "$a_st" = done ] && [ "$a_hi" = 0 ] && ok "T3 auditor STATUS reflects done / 0-high (gate-consolidated)"     || bad "T3 auditor STATUS"  "state=$a_st high=$a_hi"
-[ "$r_st" = done ] && [ "$r_bl" = 0 ] && ok "T3 reviewer STATUS reflects done / 0-blocking (gate-consolidated)" || bad "T3 reviewer STATUS" "state=$r_st blocking=$r_bl"
-[ "$o_st" = done ] && [ "$o_bl" = 0 ] && ok "T3 ops STATUS reflects done / 0-blocking (gate-consolidated)"       || bad "T3 ops STATUS"      "state=$o_st blocking=$o_bl"
-# Never crashes on a bare project with no .claude STATUS at all.
+# The dashboard NOW natively rows all six modules (the #5 fix): explorer, builder, auditor,
+# reviewer, ops, pipeline — so a stale/failed auxiliary gate is visible here, not only in the gate.
+for m in explorer builder auditor reviewer ops pipeline; do
+  printf '%s\n' "$dout" | grep -qE "^[[:space:]]*$m[[:space:]]" && ok "T3 dashboard has a native '$m' row" || bad "T3 $m row" "no '$m' row in: $dout"
+done
+# Per-module signal on the green fixture: explorer fresh, builder/pipeline done, and — the #5 fix —
+# the auxiliary gates rowed directly with state + their headline count (auditor high=, rev/ops blocking=).
+printf '%s\n' "$dout" | grep -E '^[[:space:]]*explorer' | grep -q  'current'           && ok "T3 explorer row reflects freshness=current"  || bad "T3 explorer row" "no current freshness in: $dout"
+printf '%s\n' "$dout" | grep -E '^[[:space:]]*builder'  | grep -q  'done'              && ok "T3 builder row reflects state=done"         || bad "T3 builder row"  "no done state in: $dout"
+printf '%s\n' "$dout" | grep -E '^[[:space:]]*auditor'  | grep -Eq 'done.*high=0'      && ok "T3 auditor row reflects done + high=0"       || bad "T3 auditor row"  "no done/high=0 in: $dout"
+printf '%s\n' "$dout" | grep -E '^[[:space:]]*reviewer' | grep -Eq 'done.*blocking=0'  && ok "T3 reviewer row reflects done + blocking=0"  || bad "T3 reviewer row" "no done/blocking=0 in: $dout"
+printf '%s\n' "$dout" | grep -E '^[[:space:]]*ops'      | grep -Eq 'done.*blocking=0'  && ok "T3 ops row reflects done + blocking=0"       || bad "T3 ops row"      "no done/blocking=0 in: $dout"
+printf '%s\n' "$dout" | grep -E '^[[:space:]]*pipeline' | grep -q  'done'              && ok "T3 pipeline row reflects release=done"       || bad "T3 pipeline row" "no done state in: $dout"
+# Never crashes on a bare project with no .claude STATUS at all; the auxiliary-gate rows read "not run".
 EMPTY="$WORK/empty"; mkdir -p "$EMPTY"
 rc=0; eout=$(CLAUDE_PROJECT_DIR="$EMPTY" bash "$PIPE_STATUS" 2>/dev/null) || rc=$?
 assert_eq "T3 dashboard exits 0 on an EMPTY project (no STATUS — never crashes)" 0 "$rc"
 printf '%s\n' "$eout" | grep -q 'no explorer memory' && ok "T3 dashboard nudges /pipeline:run when memory is absent" || bad "T3 empty nudge" "missing nudge in: $eout"
+for m in auditor reviewer ops; do
+  printf '%s\n' "$eout" | grep -E "^[[:space:]]*$m" | grep -q 'not run' && ok "T3 empty: '$m' row shows 'not run' (absent STATUS)" || bad "T3 empty $m" "no 'not run' for $m in: $eout"
+done
 echo ""
 
 # ===========================================================================
@@ -217,6 +225,27 @@ else
 fi
 # Guard the mutation actually changed the file (a no-op sed would make the sentinel vacuous).
 if ! cmp -s "$VERIFY_RELEASE" "$MUTDIR/scripts/verify-release.sh"; then ok "T4 mutant differs from the real gate (sed applied)"; else bad "T4 mutant" "sed was a no-op — sentinel would be vacuous"; fi
+echo ""
+
+# ===========================================================================
+# TIER 5 — BUILDER STOP-GATE (#6): verify-build.sh no-PLAN handling is STATUS-aware.
+# ===========================================================================
+echo "-- tier 5: BUILDER STOP-GATE (verify-build #6 — no-PLAN is STATUS-aware) --"
+# 5a: builder ACTUALLY RAN (STATUS state=done) but PLAN.md is absent -> the missing durable
+# artifact must be REPORTED. Under enforce that hard-blocks (exit 2) and cites the missing PLAN.
+B1="$WORK/vb_ran_noplan"; mkdir -p "$B1/.claude/builder"
+CLAUDE_PROJECT_DIR="$B1" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+rc=0; CLAUDE_PROJECT_DIR="$B1" BUILDER_ENFORCE=1 bash "$VERIFY_BUILD" >/dev/null 2>"$WORK/vb1.err" || rc=$?
+assert_eq "T5 builder ran + no PLAN.md -> verify-build BLOCKS under enforce (exit 2)" 2 "$rc"
+grep -q 'no .claude/builder/PLAN.md' "$WORK/vb1.err" && ok "T5 ...and cites the missing PLAN.md artifact" || bad "T5 missing-plan reason" "no PLAN complaint in: $(cat "$WORK/vb1.err" 2>/dev/null)"
+# 5a': SAME fixture, advisory default -> reported but NON-blocking (exit 0, never crashes).
+rc=0; CLAUDE_PROJECT_DIR="$B1" bash "$VERIFY_BUILD" >/dev/null 2>/dev/null || rc=$?
+assert_eq "T5 builder ran + no PLAN.md -> advisory by default (exit 0)" 0 "$rc"
+# 5b: NO builder activity (builder dir exists, NO STATUS, no PLAN) -> clean no-op even under enforce.
+B2="$WORK/vb_noactivity"; mkdir -p "$B2/.claude/builder"
+rc=0; CLAUDE_PROJECT_DIR="$B2" BUILDER_ENFORCE=1 bash "$VERIFY_BUILD" >/dev/null 2>"$WORK/vb2.err" || rc=$?
+assert_eq "T5 no builder activity (no STATUS) + no PLAN -> clean no-op (exit 0) under enforce" 0 "$rc"
+grep -q 'no .claude/builder/PLAN.md' "$WORK/vb2.err" && bad "T5 no-activity must not complain" "unexpected PLAN complaint: $(cat "$WORK/vb2.err" 2>/dev/null)" || ok "T5 no-activity no-op does NOT report a missing PLAN"
 echo ""
 
 echo "== e2e ladder summary: $PASS passed, $FAIL failed =="

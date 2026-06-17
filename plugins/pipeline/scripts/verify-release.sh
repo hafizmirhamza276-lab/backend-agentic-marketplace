@@ -16,7 +16,8 @@
 # Checks (REQUIRED unless noted):
 #   1. explorer memory present AND fresh (explored_commit == git HEAD)
 #   2. builder finished (STATUS state == done); if PLAN.md exists, every "## Tasks" item
-#      has a CHANGELOG coverage-map line
+#      has a STRUCTURED CHANGELOG coverage-map header ("### Task <id> … coverage") — a bare
+#      in-prose "Task <id>" mention does NOT count as coverage
 #   3. if .claude/builder/BUG.md exists: repro green + characterization/linked green
 #      (read from .claude/builder/bugfix/results.txt)
 #   4. auditor (ADVISORY when absent / extensible): if auditor STATUS exists, require 0 high;
@@ -58,18 +59,27 @@ record() {
 }
 
 # coverage_gaps <plan> <log> : print each PLAN "### Task <id>" whose id has NO matching
-# coverage line ("Task <id> ...") in the CHANGELOG. Pure awk; ids are compared as whole
-# tokens with trailing punctuation stripped, so `1` never matches `10` and `Task 1:` ==
-# `Task 1`. Empty output => every task is covered (or there are no tasks / no log).
+# STRUCTURED coverage marker in the CHANGELOG. The marker is the per-task header the builder's
+# apply-change skill emits — an H3 header that names "Task <id>" AND says "coverage":
+#   ### Task <id> — edge-case coverage
+# A bare in-prose mention ("Task 1 was tricky") or a plain bullet ("- Task 1: did A") is NOT a
+# marker and does NOT count — the old loose check let a stray sentence satisfy the gate with no
+# real coverage map. Pure awk; ids are compared as whole tokens with trailing punctuation
+# stripped, so `1` never matches `10` and `Task 1:` == `Task 1`. Empty output => every task is
+# covered (or there are no tasks / no log).
 coverage_gaps() {
   local plan="$1" log="$2"
   [ -f "$log" ] || log=/dev/null
   awk -v logf="$log" '
     BEGIN{
       while ((getline line < logf) > 0) {
-        if (match(line, /[Tt]ask[[:space:]]+[^[:space:]:,]+/)) {
-          tok=substr(line, RSTART, RLENGTH); sub(/^[Tt]ask[[:space:]]+/,"",tok)
-          gsub(/[:.,;]+$/,"",tok); if (tok!="") covered[tok]=1
+        # A task is covered ONLY by a STRUCTURED H3 coverage header (### Task <id> … coverage),
+        # never by a bare in-prose "Task <id>" mention. (TC4 reverts THIS line to the loose
+        # /[Tt]ask …/ match to prove the structured-marker requirement is load-bearing.)
+        if (line ~ /^###[[:space:]]+[Tt]ask[[:space:]]+[^[:space:]].*[Cc]overage/) {   #COVERAGE_MARKER_RE
+          tok=line; sub(/^[#[:space:]]*[Tt]ask[[:space:]]+/,"",tok)
+          sub(/[[:space:]].*$/,"",tok); gsub(/[:.,;]+$/,"",tok)
+          if (tok!="") covered[tok]=1
         }
       }
     }
@@ -115,7 +125,7 @@ else
     if [ -n "$GAPS" ]; then
       record "builder-finished" FAIL 1 "builder: task(s) missing CHANGELOG coverage map: $(printf '%s' "$GAPS" | tr '\n' ' ')"
     else
-      record "builder-finished" PASS 1 "builder done; all PLAN tasks have a coverage-map line"
+      record "builder-finished" PASS 1 "builder done; all PLAN tasks have a structured coverage-map header"
     fi
   else
     record "builder-finished" PASS 1 "builder done (no PLAN.md; coverage-map check N/A)"

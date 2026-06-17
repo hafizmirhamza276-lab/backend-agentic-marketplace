@@ -25,6 +25,9 @@
 #              crash, never fail-open, for STATUS / guards / release gate.
 #   7. MUTATION SENTINEL — sed out the core block/fail line of guard-scope + verify-release and
 #              prove the matching adversarial/integration case WOULD pass the mutant (suite has teeth).
+#   8. REGRESSION — guard-scope Defect A (fail-closed when PLAN.md exists but '## Scope' is
+#              unparseable) + Defect B (always-allow zone narrowed to .claude/builder|specs with a
+#              NARROW memory-sync risk-map carve-out); fire/silent twins + per-defect sentinels.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -266,7 +269,7 @@ echo ""
 tlog "tier3 start"; echo "-- tier 3: INTEGRATION release gate --"
 PASSP=$(mkproj rel_pass); fresh_mem "$PASSP"; mkdir -p "$PASSP/.claude/builder"
 printf '# Plan\nClarity: 9/10\n## Scope\n- src/a.py\n## Tasks\n### Task 1 — do thing\nEdge cases:\n- none\nDefinition of Done: works\n' > "$PASSP/.claude/builder/PLAN.md"
-printf '# Changelog\n### Task 1 — edge-case coverage map\n- nil -> handled at src/a.py:10\n' > "$PASSP/.claude/builder/CHANGELOG.md"
+printf '# Changelog\n### Task 1 — edge-case coverage\n- nil -> handled at src/a.py:10\n' > "$PASSP/.claude/builder/CHANGELOG.md"
 ST=$(mkproj rel_stale); stale_mem "$ST"; mkdir -p "$ST/.claude/builder"; printf '# c\n' > "$ST/.claude/builder/CHANGELOG.md"
 ND=$(mkproj rel_nd); fresh_mem "$ND"; mkdir -p "$ND/.claude/builder"; printf '# c\n' > "$ND/.claude/builder/CHANGELOG.md"
 BR=$(mkproj rel_bug); fresh_mem "$BR"; mkdir -p "$BR/.claude/builder/bugfix"; printf '# c\n' > "$BR/.claude/builder/CHANGELOG.md"
@@ -497,6 +500,173 @@ wait
 real_rc=X; IFS= read -r real_rc < "$PARDIR/t7_real.rc" || true
 mut_rc=X;  IFS= read -r mut_rc  < "$PARDIR/t7_mut.rc"  || true
 if [ "$real_rc" = 2 ] && [ "$mut_rc" = 0 ]; then ok "T7 verify-release sentinel: real BLOCKS(2), mutant PASSES(0) -> fail line load-bearing"; else bad "T7 verify-release sentinel" "real=$real_rc(want 2) mut=$mut_rc(want 0)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 8 — REGRESSION: guard-scope Defect A (fail-closed on unparseable Scope) and Defect B
+# (narrowed always-allow zone + NARROW memory-sync carve-out). Each defect is a fire/silent
+# pair in an isolated fixture; two mutation sentinels prove the new fail-closed + narrowed
+# lines are load-bearing. All cases force the pure-shell path (FAKEBIN) and run in parallel.
+# ===========================================================================
+tlog "tier8 start"; echo "-- tier 8: REGRESSION guard-scope Defect A + B --"
+# Fixture NS: PLAN.md EXISTS but its '## Scope' has NO parseable bullet (prose only) -> unparseable.
+NS=$(mkproj t8_noscope); mkdir -p "$NS/.claude/builder"
+printf '# Plan\nClarity: 9/10\n## Scope\nThe files this change may touch (TBD).\n## Tasks\n### Task 1 — do thing\n' > "$NS/.claude/builder/PLAN.md"
+# Fixture VS: PLAN.md with a VALID Scope listing exactly one source file.
+VS=$(mkproj t8_validscope); mkdir -p "$VS/.claude/builder"
+printf '# Plan\nClarity: 9/10\n## Scope\n- src/app.py\n## Tasks\n### Task 1 — do thing\n' > "$VS/.claude/builder/PLAN.md"
+# add8 <label> <expect> <proj> <relpath> : append a guard-scope Edit case (abs file_path = proj/relpath).
+T8CASES="$WORK/t8.cases"; : > "$T8CASES"
+add8() {
+  printf 'T8 %s\t%s\t%s\t%s\t{"tool_name":"Edit","tool_input":{"file_path":"%s/%s"}}\t%s\n' \
+    "$1" "$2" "$GUARD_SCOPE" "$3" "$3" "$4" "$FAKEBIN" >> "$T8CASES"
+}
+# -- Defect A: PLAN.md exists but Scope unparseable must FAIL CLOSED (was warn+exit0) --
+add8 "A1 unparseable Scope + out-of-zone source edit -> BLOCKED (fail-closed)" 2 "$NS" "src/evil.py"
+add8 "A2 (control) valid Scope lists target -> ALLOWED (normal path intact)"   0 "$VS" "src/app.py"
+# -- Defect B: narrowed always-allow zone --
+add8 "B1 builder edit to PLAN.md under broken Scope -> ALLOWED (so user can fix it)"  0 "$NS" ".claude/builder/PLAN.md"
+add8 "B2 builder edit to .claude/pipeline/STATUS.json -> BLOCKED (not in zone/scope)" 2 "$VS" ".claude/pipeline/STATUS.json"
+add8 "B2 builder edit to .claude/auditor/FINDINGS.md -> BLOCKED (not in zone/scope)"  2 "$VS" ".claude/auditor/FINDINGS.md"
+# -- Defect B: memory-sync carve-out — the four risk-map artifacts it writes (NOT in Scope) -> ALLOWED --
+add8 "B3 memory-sync .claude/explorer/MEMORY.md -> ALLOWED (carve-out)"   0 "$VS" ".claude/explorer/MEMORY.md"
+add8 "B3 memory-sync .claude/explorer/index.json -> ALLOWED (carve-out)"  0 "$VS" ".claude/explorer/index.json"
+add8 "B3 memory-sync .claude/explorer/TRACK.md -> ALLOWED (carve-out)"    0 "$VS" ".claude/explorer/TRACK.md"
+add8 "B3 memory-sync .claude/explorer/map/core.md -> ALLOWED (carve-out)" 0 "$VS" ".claude/explorer/map/core.md"
+# control: carve-out is NARROW — a non-risk-map explorer path stays BLOCKED (we did NOT re-allow .claude/explorer/*).
+add8 "B3 (control) .claude/explorer/scratch.md -> BLOCKED (carve-out narrow, not .claude/explorer/*)" 2 "$VS" ".claude/explorer/scratch.md"
+# -- Defect B: no regression of the core scope check (F2/F3) --
+add8 "B4 (control) in-scope src/app.py still ALLOWED (no F2/F3 regression)"       0 "$VS" "src/app.py"
+add8 "B4 (control) out-of-scope src/other.py still BLOCKED (no F2/F3 regression)" 2 "$VS" "src/other.py"
+run_guard_cases "$T8CASES"
+
+# Mutation sentinel (A): neuter the fail-closed block -> the unparseable-Scope case (A1) must flip
+# from BLOCK(2) to PASS(0), proving the new fail-closed line is load-bearing (not vacuous).
+MA="$WORK/mut_scope_a"; mkdir -p "$MA/scripts" "$MA/lib"; cp "$LIB" "$MA/lib/common.sh"
+sed 's/.*no parseable .## Scope.*/exit 0/' "$GUARD_SCOPE" > "$MA/scripts/guard-scope.sh"
+A1JSON=$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/src/evil.py"}}' "$NS")
+a_real=0; printf '%s' "$A1JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$NS" bash "$GUARD_SCOPE"               >/dev/null 2>&1 || a_real=$?
+a_mut=0;  printf '%s' "$A1JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$NS" bash "$MA/scripts/guard-scope.sh"  >/dev/null 2>&1 || a_mut=$?
+if [ "$a_real" = 2 ] && [ "$a_mut" = 0 ]; then ok "T8 Defect-A sentinel: real BLOCKS(2), mutant PASSES(0) -> fail-closed line load-bearing"; else bad "T8 Defect-A sentinel" "real=$a_real(want 2) mut=$a_mut(want 0)"; fi
+
+# Mutation sentinel (B): re-broaden the narrowed zone back to `.claude/*` -> a non-builder .claude
+# path (B2, pipeline) must flip from BLOCK(2) to PASS(0), proving the narrowing is load-bearing.
+MB="$WORK/mut_scope_b"; mkdir -p "$MB/scripts" "$MB/lib"; cp "$LIB" "$MB/lib/common.sh"
+sed 's|^[[:space:]]*\.claude/builder/\*.*|  .claude/*) exit 0 ;;|' "$GUARD_SCOPE" > "$MB/scripts/guard-scope.sh"
+B2JSON=$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/.claude/pipeline/STATUS.json"}}' "$VS")
+b_real=0; printf '%s' "$B2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$VS" bash "$GUARD_SCOPE"               >/dev/null 2>&1 || b_real=$?
+b_mut=0;  printf '%s' "$B2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$VS" bash "$MB/scripts/guard-scope.sh"  >/dev/null 2>&1 || b_mut=$?
+if [ "$b_real" = 2 ] && [ "$b_mut" = 0 ]; then ok "T8 Defect-B sentinel: real BLOCKS(2), mutant PASSES(0) -> narrowed allow-zone load-bearing"; else bad "T8 Defect-B sentinel" "real=$b_real(want 2) mut=$b_mut(want 0)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 9 — REGRESSION: guard-readonly Defect #3 (UNANCHORED allow-zone). The old allow was a
+# bare SUBSTRING test (*"/.claude/explorer/"*), so ANY absolute path that merely CONTAINED
+# "/.claude/explorer/" — even one OUTSIDE this project — was allowed. The fix anchors the zone to
+# THIS project's own dir (bd_project_dir + bd_normalize_path, the SAME base used to resolve a
+# relative target) and matches it as a path PREFIX. Fire/silent twins + an outside-project
+# sentinel are the permanent guard against the substring defect returning. All cases force the
+# pure-shell path (FAKEBIN) and run in parallel.
+# ===========================================================================
+tlog "tier9 start"; echo "-- tier 9: REGRESSION guard-readonly Defect #3 (unanchored allow-zone) --"
+# RPROJ: the real project (CLAUDE_PROJECT_DIR). OTHERP: a SIBLING project (NOT under RPROJ) whose
+# own .claude/explorer/ must NOT be writable through RPROJ's guard.
+RPROJ=$(mkproj t9proj)
+OTHERP=$(mkproj t9other); mkdir -p "$OTHERP/.claude/explorer"
+T9CASES="$WORK/t9.cases"; : > "$T9CASES"
+add9() {  # <label> <expect> <proj> <json>  — guard-readonly case, forced down the pure-shell path
+  printf 'T9 %s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$GUARD_READONLY" "$3" "$4" "$FAKEBIN" >> "$T9CASES"
+}
+# TR1 in-project, in-zone write -> ALLOWED (the legitimate memory write stays silent).
+add9 "TR1 in-project in-zone write -> ALLOWED" 0 "$RPROJ" "{\"tool_input\":{\"file_path\":\"$RPROJ/.claude/explorer/notes.md\"}}"
+# TR2 (the fix) absolute path OUTSIDE the project that CONTAINS /.claude/explorer/ -> BLOCKED.
+#     This PASSED (was allowed) before the anchor; it must now BLOCK.
+add9 "TR2 OUTSIDE-project path containing /.claude/explorer/ -> BLOCKED (was ALLOWED pre-fix)" 2 "$RPROJ" "{\"tool_input\":{\"file_path\":\"$OTHERP/.claude/explorer/evil.md\"}}"
+# TR3 (control) in-project but OUT of zone -> BLOCKED (unchanged by the fix).
+add9 "TR3 (control) in-project out-of-zone source -> BLOCKED" 2 "$RPROJ" "{\"tool_input\":{\"file_path\":\"$RPROJ/src/evil.py\"}}"
+# TR4 (F2 regression) a '..' traversal out of the zone is still caught -> BLOCKED.
+add9 "TR4 (F2) .claude/explorer/../../evil traversal -> BLOCKED" 2 "$RPROJ" '{"tool_input":{"file_path":".claude/explorer/../../evil"}}'
+# TR5 (F9 preserved) NotebookEdit under the zone (notebook_path) -> ALLOWED.
+add9 "TR5 (F9) NotebookEdit under the zone -> ALLOWED" 0 "$RPROJ" '{"tool_input":{"notebook_path":".claude/explorer/nb.ipynb"}}'
+run_guard_cases "$T9CASES"
+
+# TR6 MUTATION SENTINEL: revert the anchored allow back to the OLD substring form -> TR2's
+# outside-project path (which the REAL guard now BLOCKS) must PASS the mutant, proving the $ZONE
+# prefix anchor is load-bearing (not vacuous). The sed swaps the `"$ZONE"/*) exit 0` case arm for
+# the bare-substring arm; the now-unused PROJECT/ZONE assignments are harmlessly left in place.
+MRO="$WORK/mut_readonly"; mkdir -p "$MRO/scripts" "$MRO/lib"; cp "$LIB" "$MRO/lib/common.sh"
+sed 's|.*ZONE.*exit 0.*|  *"/.claude/explorer/"*) exit 0 ;;|' "$GUARD_READONLY" > "$MRO/scripts/guard-readonly.sh"
+TR2JSON=$(printf '{"tool_input":{"file_path":"%s/.claude/explorer/evil.md"}}' "$OTHERP")
+ro_real=0; printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$GUARD_READONLY"                >/dev/null 2>&1 || ro_real=$?
+ro_mut=0;  printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$MRO/scripts/guard-readonly.sh" >/dev/null 2>&1 || ro_mut=$?
+if [ "$ro_real" = 2 ] && [ "$ro_mut" = 0 ]; then ok "T9 Defect-#3 sentinel: real BLOCKS(2), mutant PASSES(0) -> \$ZONE prefix anchor load-bearing"; else bad "T9 Defect-#3 sentinel" "real=$ro_real(want 2) mut=$ro_mut(want 0)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 10 — REGRESSION: the release-gate coverage check requires a STRUCTURED per-task marker.
+# An external review found the old coverage_gaps treated ANY casual `Task <id>` mention in
+# CHANGELOG.md as coverage, so a stray prose line ("Task 1 was tricky") satisfied the gate with no
+# real coverage map. The fix counts a PLAN task as covered ONLY when the CHANGELOG carries the
+# STRUCTURED header the builder's apply-change skill emits (### Task <id> — edge-case coverage):
+#   TC1 (the fix) prose-only mention -> GAP -> gate BLOCKS (this PASSED wrongly before the fix);
+#   TC2 (control) structured marker for every task -> coverage PASSES -> READY;
+#   TC3 (whole-token) a `Task 10` marker does NOT satisfy `Task 1`;
+#   TC4 (sentinel) reverting the parser to the loose mention makes TC1 PASS the mutant -> the
+#       structured-marker requirement is load-bearing, not vacuous.
+# Only the coverage check (#2) can fail here: no BUG.md and no auditor/reviewer/ops STATUS -> those
+# rows SKIP, and a non-empty CHANGELOG passes check #5, so a BLOCK isolates the coverage verdict.
+# ===========================================================================
+tlog "tier10 start"; echo "-- tier 10: REGRESSION coverage requires a STRUCTURED per-task marker --"
+# cov_fix <name> : fresh explorer memory + builder STATUS done + empty .claude/builder. Prints dir.
+cov_fix() {
+  _d=$(mkproj "$1"); fresh_mem "$_d"; mkdir -p "$_d/.claude/builder"
+  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+  printf '%s' "$_d"
+}
+
+# TC1 (the fix) — a bare prose "Task 1" mention, NO structured marker -> Task 1 is a GAP ->
+# builder-finished FAILS -> gate BLOCKS (exit 2). This PASSED (wrongly) before the fix.
+TC1=$(cov_fix t10_tc1)
+printf '# Plan\n## Tasks\n### Task 1 — do thing\n' > "$TC1/.claude/builder/PLAN.md"
+printf '# Changelog\nTask 1 was tricky to implement.\n' > "$TC1/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC1" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC1 prose-only mention -> gate BLOCKS (exit 2)" 2 "$rc"
+release_md_has "$TC1" "missing CHANGELOG coverage" && ok "T10 TC1 RELEASE.md cites the coverage gap" || bad "T10 TC1 reason" "no coverage-gap reason"
+release_md_has "$TC1" "Required failures: 1" && ok "T10 TC1 coverage is the SOLE blocker (1 required failure)" || bad "T10 TC1 isolation" "coverage not the only failure"
+
+# TC2 (control) — a proper structured marker for every PLAN task -> coverage PASSES -> READY.
+# (The full all-seven-checks-PASS green path is proven by the e2e capstone, tier 1.)
+TC2=$(cov_fix t10_tc2)
+printf '# Plan\n## Tasks\n### Task 1 — do thing\n### Task 2 — do other\n' > "$TC2/.claude/builder/PLAN.md"
+printf '# Changelog\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n### Task 2 — edge-case coverage\n- nil -> handled at b:1\n' > "$TC2/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC2" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC2 structured markers -> gate READY (exit 0)" 0 "$rc"
+release_md_has "$TC2" "RELEASE READY" && ok "T10 TC2 RELEASE.md reads RELEASE READY" || bad "T10 TC2 verdict" "not RELEASE READY"
+
+# TC3 (whole-token) — a marker for `Task 10` must NOT satisfy `Task 1`.
+TC3a=$(cov_fix t10_tc3a)
+printf '# Plan\n## Tasks\n### Task 1 — do thing\n' > "$TC3a/.claude/builder/PLAN.md"
+printf '# Changelog\n### Task 10 — edge-case coverage\n- nil -> handled at a:1\n' > "$TC3a/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC3a" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC3 'Task 10' marker does NOT cover 'Task 1' (exit 2)" 2 "$rc"
+release_md_has "$TC3a" "missing CHANGELOG coverage" && ok "T10 TC3 RELEASE.md cites the Task 1 gap" || bad "T10 TC3 reason" "no coverage-gap reason"
+# control: the SAME `Task 10` marker DOES cover a PLAN `Task 10` -> proves TC3a is a whole-token
+# mismatch (not the marker going unrecognized).
+TC3b=$(cov_fix t10_tc3b)
+printf '# Plan\n## Tasks\n### Task 10 — do thing\n' > "$TC3b/.claude/builder/PLAN.md"
+printf '# Changelog\n### Task 10 — edge-case coverage\n- nil -> handled at a:1\n' > "$TC3b/.claude/builder/CHANGELOG.md"
+rc=0; CLAUDE_PROJECT_DIR="$TC3b" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T10 TC3 (control) 'Task 10' marker DOES cover 'Task 10' (exit 0)" 0 "$rc"
+
+# TC4 MUTATION SENTINEL — revert the coverage parser to the loose `Task <id>` mention (sed the
+# #COVERAGE_MARKER_RE line) and prove TC1's prose-only fixture now PASSES the mutant while the REAL
+# gate still BLOCKS it -> the structured-marker requirement is load-bearing, not vacuous.
+MCOV="$WORK/mut_coverage"; mkdir -p "$MCOV/scripts" "$MCOV/lib"; cp "$LIB" "$MCOV/lib/common.sh"
+sed 's|.*#COVERAGE_MARKER_RE.*|        if (line ~ /[Tt]ask[[:space:]]+[^[:space:]:,]+/) {|' "$VERIFY_RELEASE" > "$MCOV/scripts/verify-release.sh"
+cov_real=0; CLAUDE_PROJECT_DIR="$TC1" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE"                >/dev/null 2>&1 || cov_real=$?
+cov_mut=0;  CLAUDE_PROJECT_DIR="$TC1" PIPELINE_ENFORCE=1 bash "$MCOV/scripts/verify-release.sh" >/dev/null 2>&1 || cov_mut=$?
+if [ "$cov_real" = 2 ] && [ "$cov_mut" = 0 ]; then ok "T10 TC4 sentinel: real BLOCKS(2), loose mutant PASSES(0) -> structured-marker requirement load-bearing"; else bad "T10 TC4 sentinel" "real=$cov_real(want 2) mut=$cov_mut(want 0)"; fi
+if ! cmp -s "$VERIFY_RELEASE" "$MCOV/scripts/verify-release.sh"; then ok "T10 TC4 mutant differs from the real gate (sed applied)"; else bad "T10 TC4 mutant" "sed was a no-op — sentinel would be vacuous"; fi
 echo ""
 
 # ===========================================================================
