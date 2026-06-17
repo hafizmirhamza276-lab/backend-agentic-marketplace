@@ -3,6 +3,13 @@
 # enforce mode. Checks the change actually produced durable artifacts AND that the
 # memory it relies on is path-accurate.
 #
+# No-PLAN handling is STATUS-aware (not a blanket early-exit). If the builder STATUS shows the
+# builder actually ran (state set and != pending) but neither PLAN.md NOR a bug-fix BUG.md
+# exists, that missing durable artifact is REPORTED — a build that ran should leave a plan. A
+# bug-fix build records BUG.md instead of a PLAN, so that case is NOT flagged. Only the genuine
+# "build not started" case (no builder STATUS, or state still pending) stays the silent no-op it
+# always was. Reading STATUS is pure-shell (bd_status_read's grep fallback); advisory by default.
+#
 # Carries over the known explorer defect: index.json paths were INFERRED, not
 # verified (~half pointed at wrong sub-folders). This gate fails if any
 # index.json file path does not resolve on disk — exactly the class of error a
@@ -42,9 +49,21 @@ if bd_feedback_enforce; then
   fi
 fi
 
-[ -f "$PLAN" ] || exit 0
+# No PLAN.md: this WAS a blanket `exit 0` that silently passed even when the builder had run and
+# left no plan (and made the "no PLAN.md" note below dead code). Now STATUS-aware — distinguish
+# "build not started" (legit no-op) from "builder ran but left no durable plan" (a reportable
+# missing artifact). A bug-fix build records BUG.md instead of a PLAN, so it is NOT a missing
+# artifact and we exit clean then too.
+if [ ! -f "$PLAN" ]; then
+  BSTATE="$(bd_status_read builder state 2>/dev/null || true)"
+  case "$BSTATE" in
+    ''|pending) exit 0 ;;                 # no builder activity yet — nothing durable to verify
+  esac
+  [ -f "$(bd_bug)" ] && exit 0            # bug-fix build: BUG.md is the durable artifact, not a PLAN
+  # else: builder engaged (running/blocked/done/failed) yet left no PLAN.md -> fall through, report it.
+fi
 
-[ -f "$PLAN" ] || note "no .claude/builder/PLAN.md — record the plan you implemented"
+[ -f "$PLAN" ] || note "no .claude/builder/PLAN.md — builder STATUS shows it ran; record the plan you implemented"
 [ -f "$LOG" ]  || note "no .claude/builder/CHANGELOG.md — record what changed"
 
 # Scope paths named in the plan should exist after implementation.
