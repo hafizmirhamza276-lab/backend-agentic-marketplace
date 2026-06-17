@@ -11,7 +11,10 @@ This is the same conductor contract as `/pipeline:run` (follow the **`orchestrat
 builder's **BUG-FIX MODE** instead of the plain feature flow.
 
 **Prime directive — protect your own context window.** Coordinate; delegate the heavy
-reading; read back STATUS + ≤12-line summaries. Never bypass a gate.
+reading; read back STATUS + ≤12-line summaries. Never bypass a gate. Run the modules in this
+**exact order — explore → build (BUG-FIX MODE) → audit → review → ops → release-gate** — each
+delegated to its own existing sub-flow (`/explorer:start`, `/builder:start`, `/auditor:run`,
+`/reviewer:run`, `/ops:run`, then `verify-release.sh`), reading back only STATUS + a short summary.
 
 ## Phase 0 — Read state cheaply
 1. Get the dashboard (`pipeline-status.sh` / `/pipeline:status`). Note: a lingering
@@ -36,21 +39,47 @@ reading; read back STATUS + ≤12-line summaries. Never bypass a gate.
 4. The builder records its STATUS `state == done` and updates `BUG.md` (`Repro status:
    GREEN`). Treat non-`done` as not finished.
 
+## Phase 2.4 — Audit the fix (auditor, before the reviewer)
+5. Run the **auditor flow** (`/auditor:run`) on what the fix changed. It runs this project's
+   deterministic **F1–F13** regression detectors (plus breadth+depth sub-agents for a non-trivial
+   fix), writes `.claude/auditor/FINDINGS.md`, and records
+   `bd_status_write auditor audit <done|failed> "" high=$H med=$M low=$L`. A HIGH is a real
+   regression — a minimal fix must not introduce one. Treat a `failed` auditor STATUS as **not
+   finished**; the gate enforces 0-high.
+
+## Phase 2.5 — Review the fix (reviewer, before the gate)
+6. Run the **reviewer flow** (`/reviewer:run`) on the fix diff vs HEAD — against the explorer
+   `MEMORY.md` invariants/risk map, the approved `PLAN.md` scope, and surviving callers (a fix that
+   touches a shared symbol must not strand a caller). It writes `.claude/reviewer/REVIEW.md` and
+   records `bd_status_write reviewer review <done|failed> "" blocking=$B concern=$C`. A BLOCKING is a
+   real breakage; treat a `failed` reviewer STATUS as **not finished**; the gate enforces 0-blocking.
+
+## Phase 2.6 — Assess deploy/release readiness (ops, before the gate)
+7. Run the **ops flow** (`/ops:run`) so the full sequence is explore → build (BUG-FIX MODE) → audit
+   → review → ops → release-gate. With your confirmation it records a build/test ledger and runs the
+   deterministic checks (O1 test-ledger, O2 version-consistency), writes `.claude/ops/OPS.md`, and
+   records `bd_status_write ops readiness <done|failed> "" blocking=$B concern=$C`. A BLOCKING (a
+   recorded RED build/test) means the codebase is provably not releasable; treat a `failed` ops
+   STATUS as **not finished**; the gate enforces 0-blocking. Auditor, reviewer, and ops are
+   orthogonal — all three verdicts feed the gate independently.
+
 ## Phase 3 — Release gate (deterministic)
-5. Invoke `"${CLAUDE_PLUGIN_ROOT}"/scripts/verify-release.sh`. Because `BUG.md` exists, the
+8. Invoke `"${CLAUDE_PLUGIN_ROOT}"/scripts/verify-release.sh`. Because `BUG.md` exists, the
    gate additionally requires the bug-fix net to be green (repro green + characterization/
-   linked green from `results.txt`). It writes `RELEASE.md` + the pipeline STATUS. Advisory
-   by default; enforce via `PIPELINE_ENFORCE=1` / `settings.enforce_release=true`. A
-   `failed` release STATUS is a hard stop.
+   linked green from `results.txt`) — on top of the auditor `high == 0`, reviewer `blocking == 0`,
+   and ops `blocking == 0` checks (each present now that those phases ran; absent ones SKIP). It
+   writes `RELEASE.md` + the pipeline STATUS. Advisory by default; enforce via `PIPELINE_ENFORCE=1` /
+   `settings.enforce_release=true`. A `failed` release STATUS is a hard stop.
 
 ## Phase 4 — Honest residual report
-6. **If the gate passes:** report the fix with the **repro red→green** proof, which
-   regression tests passed, an explicit **RESIDUAL-RISK** section (untested paths the fix
-   touches; integration/runtime/concurrency cases not exercised; memory blind spots), and a
-   confidence statement — **never "100%"**. After the user accepts, the builder clears the
+9. **If the gate passes:** **declare the fix prod-ready** and report it with the **repro
+   red→green** proof, which regression tests passed, an explicit **RESIDUAL-RISK** section (untested
+   paths the fix touches; integration/runtime/concurrency cases not exercised; memory blind spots),
+   and a confidence statement — **never "100%"**. After the user accepts, the builder clears the
    bug-fix state (`BUG.md` + `bugfix/`) and memory-sync records the defect in the risk map.
-7. **If the gate fails:** **STOP** and report the exact failing checks from `RELEASE.md`
-   (e.g. "bugfix: reproduction not green") and the next action to clear each.
+10. **If the gate fails:** **STOP** and report the exact failing checks from `RELEASE.md`
+   (e.g. "bugfix: reproduction not green"; "auditor HIGH"; "reviewer BLOCKING"; "ops BLOCKING") and
+   the single next action to clear each. Do not claim the fix is releasable.
 
 ### Standing rules
 - A fix with no failing repro is a guess — the gate will not call it releasable, and
