@@ -560,6 +560,49 @@ if [ "$b_real" = 2 ] && [ "$b_mut" = 0 ]; then ok "T8 Defect-B sentinel: real BL
 echo ""
 
 # ===========================================================================
+# TIER 9 — REGRESSION: guard-readonly Defect #3 (UNANCHORED allow-zone). The old allow was a
+# bare SUBSTRING test (*"/.claude/explorer/"*), so ANY absolute path that merely CONTAINED
+# "/.claude/explorer/" — even one OUTSIDE this project — was allowed. The fix anchors the zone to
+# THIS project's own dir (bd_project_dir + bd_normalize_path, the SAME base used to resolve a
+# relative target) and matches it as a path PREFIX. Fire/silent twins + an outside-project
+# sentinel are the permanent guard against the substring defect returning. All cases force the
+# pure-shell path (FAKEBIN) and run in parallel.
+# ===========================================================================
+tlog "tier9 start"; echo "-- tier 9: REGRESSION guard-readonly Defect #3 (unanchored allow-zone) --"
+# RPROJ: the real project (CLAUDE_PROJECT_DIR). OTHERP: a SIBLING project (NOT under RPROJ) whose
+# own .claude/explorer/ must NOT be writable through RPROJ's guard.
+RPROJ=$(mkproj t9proj)
+OTHERP=$(mkproj t9other); mkdir -p "$OTHERP/.claude/explorer"
+T9CASES="$WORK/t9.cases"; : > "$T9CASES"
+add9() {  # <label> <expect> <proj> <json>  — guard-readonly case, forced down the pure-shell path
+  printf 'T9 %s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$GUARD_READONLY" "$3" "$4" "$FAKEBIN" >> "$T9CASES"
+}
+# TR1 in-project, in-zone write -> ALLOWED (the legitimate memory write stays silent).
+add9 "TR1 in-project in-zone write -> ALLOWED" 0 "$RPROJ" "{\"tool_input\":{\"file_path\":\"$RPROJ/.claude/explorer/notes.md\"}}"
+# TR2 (the fix) absolute path OUTSIDE the project that CONTAINS /.claude/explorer/ -> BLOCKED.
+#     This PASSED (was allowed) before the anchor; it must now BLOCK.
+add9 "TR2 OUTSIDE-project path containing /.claude/explorer/ -> BLOCKED (was ALLOWED pre-fix)" 2 "$RPROJ" "{\"tool_input\":{\"file_path\":\"$OTHERP/.claude/explorer/evil.md\"}}"
+# TR3 (control) in-project but OUT of zone -> BLOCKED (unchanged by the fix).
+add9 "TR3 (control) in-project out-of-zone source -> BLOCKED" 2 "$RPROJ" "{\"tool_input\":{\"file_path\":\"$RPROJ/src/evil.py\"}}"
+# TR4 (F2 regression) a '..' traversal out of the zone is still caught -> BLOCKED.
+add9 "TR4 (F2) .claude/explorer/../../evil traversal -> BLOCKED" 2 "$RPROJ" '{"tool_input":{"file_path":".claude/explorer/../../evil"}}'
+# TR5 (F9 preserved) NotebookEdit under the zone (notebook_path) -> ALLOWED.
+add9 "TR5 (F9) NotebookEdit under the zone -> ALLOWED" 0 "$RPROJ" '{"tool_input":{"notebook_path":".claude/explorer/nb.ipynb"}}'
+run_guard_cases "$T9CASES"
+
+# TR6 MUTATION SENTINEL: revert the anchored allow back to the OLD substring form -> TR2's
+# outside-project path (which the REAL guard now BLOCKS) must PASS the mutant, proving the $ZONE
+# prefix anchor is load-bearing (not vacuous). The sed swaps the `"$ZONE"/*) exit 0` case arm for
+# the bare-substring arm; the now-unused PROJECT/ZONE assignments are harmlessly left in place.
+MRO="$WORK/mut_readonly"; mkdir -p "$MRO/scripts" "$MRO/lib"; cp "$LIB" "$MRO/lib/common.sh"
+sed 's|.*ZONE.*exit 0.*|  *"/.claude/explorer/"*) exit 0 ;;|' "$GUARD_READONLY" > "$MRO/scripts/guard-readonly.sh"
+TR2JSON=$(printf '{"tool_input":{"file_path":"%s/.claude/explorer/evil.md"}}' "$OTHERP")
+ro_real=0; printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$GUARD_READONLY"                >/dev/null 2>&1 || ro_real=$?
+ro_mut=0;  printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$MRO/scripts/guard-readonly.sh" >/dev/null 2>&1 || ro_mut=$?
+if [ "$ro_real" = 2 ] && [ "$ro_mut" = 0 ]; then ok "T9 Defect-#3 sentinel: real BLOCKS(2), mutant PASSES(0) -> \$ZONE prefix anchor load-bearing"; else bad "T9 Defect-#3 sentinel" "real=$ro_real(want 2) mut=$ro_mut(want 0)"; fi
+echo ""
+
+# ===========================================================================
 tlog "all tiers done"
 echo "== ladder summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ] || exit 1
