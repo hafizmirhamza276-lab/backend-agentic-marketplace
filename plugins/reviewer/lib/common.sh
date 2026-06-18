@@ -376,8 +376,19 @@ except Exception:
     print("")
 PY
   fi
-  # Pure-shell fallback: pull `"key": value` (string, number, or null) from the JSON.
-  line="$(grep -oE "\"$key\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|[^,}[:space:]]+)" "$file" 2>/dev/null | head -n1)"
+  # Pure-shell fallback: pull `"key": value` (string, number, or null) from the JSON. The grep is
+  # ANCHORED to line-start (^[[:space:]]*"key") so it matches ONLY a TOP-LEVEL key: both writers
+  # (python json.dump indent=2 AND the shell writer above) emit one key per line with a 2-space
+  # indent, so every real top-level key begins its own line. WITHOUT the anchor a `"key": v`
+  # substring INSIDE a string value (or a nested object) could be returned by head -n1 BEFORE the
+  # real key — making the release gate MISREAD auditor high= / reviewer|ops blocking= (a false block
+  # when the real count is 0, or — the dangerous direction — a FAIL-OPEN when an earlier `"high": 0`
+  # substring masks a real non-zero count). The python reader is unaffected (json.load already keys
+  # on the real top-level field). The extraction sed below is unchanged: its `[^:]*` spans the
+  # leading indent + the quoted key (neither holds a ':'), so the first ':' it stops at is still the
+  # key/value separator. (Line-start anchoring is valid ONLY because the writer is pretty/one-key-
+  # per-line; it would be WRONG for a compact single-line writer — but this project never emits one.)
+  line="$(grep -oE "^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|[^,}[:space:]]+)" "$file" 2>/dev/null | head -n1)"  #STATUS_KEY_RE
   [ -n "$line" ] || { printf ''; return 0; }
   val="$(printf '%s' "$line" | sed -E 's/^[^:]*:[[:space:]]*//')"
   case "$val" in
