@@ -670,6 +670,84 @@ if ! cmp -s "$VERIFY_RELEASE" "$MCOV/scripts/verify-release.sh"; then ok "T10 TC
 echo ""
 
 # ===========================================================================
+# TIER 11 — REGRESSION: bd_status_read's PURE-SHELL fallback must be COLLISION-PROOF (external
+# review #8). The fallback key grep was UNANCHORED:
+#     grep -oE "\"$key\"[[:space:]]*:..." | head -n1
+# so a `"key": v` substring INSIDE a STRING field value (or a nested object) could be returned by
+# head -n1 BEFORE the real top-level key. The release gate reads auditor high= and reviewer|ops
+# blocking= through THIS function, so a false match makes it MISREAD the counts: a false BLOCK when
+# the real count is 0, or — the dangerous direction — a FAIL-OPEN when an earlier `"high": 0`
+# substring masks a real non-zero count and an unsafe build releases. The fix ANCHORS the grep to
+# line-start (^[[:space:]]*"key"); STEP-0 confirmed BOTH writers emit one top-level key per line with
+# a 2-space indent, so a mid-line substring can never be returned. EVERY case forces the python-FREE
+# fallback (FAKEBIN shadows python) — the bug is python-less ONLY (the python reader uses json.load
+# and was always correct). The adversarial fixtures are HAND-WRITTEN on purpose: bd_json_escape would
+# escape the embedded quotes (which is precisely why the WRITER's own output is safe), so a literal
+# unescaped `"high": N` can only reach the reader from a file it did not write — and it must survive.
+#   TS1 (the fix)  STRING value holds a literal `"high": 9` before the real high:0 -> read == 0 (NOT
+#                  9); a fail-open twin (earlier `"high":0` before real high:5) -> read == 5 (NOT 0).
+#   TS2 (control)  a NORMAL writer-produced STATUS -> module/phase/state/coverage/high/blocking read
+#                  correctly, and a colon-bearing value (updated_at) survives the extraction sed.
+#   TS3            re-assert TS1 under an explicit py=none PATH (not just the stub), when available.
+#   TS4 (sentinel) revert the anchor (the #STATUS_KEY_RE line) -> TS1 now MIS-reads 9 -> the line-
+#                  start anchor is load-bearing (not vacuous).
+# ===========================================================================
+tlog "tier11 start"; echo "-- tier 11: REGRESSION bd_status_read fallback collision-proof --"
+# sread_fb <proj> <module> <key> [lib] : read a STATUS key via the python-FREE fallback (FAKEBIN
+# forces it). Defaults to the real $LIB; pass a mutant lib path for the sentinel.
+sread_fb() {
+  _p=$1; _m=$2; _k=$3; _lib=${4:-$LIB}
+  PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$_p" LIB="$_lib" bash "$LIBHELPER" sread "$_m" "$_k" 2>/dev/null || true
+}
+# mkadv <file> <real_high> <note> : craft an adversarial auditor STATUS whose STRING field "note"
+# carries an UNescaped `"high": N` substring on its OWN line BEFORE the real top-level high.
+mkadv() {
+  mkdir -p "$(dirname "$1")"
+  { printf '{\n  "module": "auditor",\n  "phase": "audit",\n  "state": "done",\n  "commit": "abc1234",\n  "coverage": 95,\n  "updated_at": "2026-06-18T04:58:08Z",\n'
+    printf '  "note": "%s",\n' "$3"
+    printf '  "high": %s,\n  "blocking": 0\n}\n' "$2"
+  } > "$1"
+}
+
+# TS1 (false-block direction): string value embeds `"high": 9`, real top-level high=0 -> must read 0.
+T11A=$(mkproj t11_adv); mkadv "$T11A/.claude/auditor/STATUS.json" 0 'prior run flagged "high": 9 issues here'
+assert_eq "T11 TS1 string-value \"high\":9 substring -> real top-level high=0 (NOT 9)" 0 "$(sread_fb "$T11A" auditor high)"
+# TS1 (fail-open twin — the DANGEROUS direction): earlier `"high":0` must NOT mask real high=5.
+T11F=$(mkproj t11_fo); mkadv "$T11F/.claude/auditor/STATUS.json" 5 'log noted "high": 0 earlier but'
+assert_eq "T11 TS1 fail-open twin: earlier \"high\":0 substring does NOT mask real high=5" 5 "$(sread_fb "$T11F" auditor high)"
+
+# TS2 (control): a NORMAL writer-produced STATUS round-trips every field via the fallback (no regression).
+T11C=$(mkproj t11_ctl)
+PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$T11C" LIB="$LIB" bash "$LIBHELPER" swrite auditor audit done 88 high=0 blocking=0 >/dev/null 2>&1 || true
+assert_eq "T11 TS2 control module"   auditor "$(sread_fb "$T11C" auditor module)"
+assert_eq "T11 TS2 control phase"    audit   "$(sread_fb "$T11C" auditor phase)"
+assert_eq "T11 TS2 control state"    done    "$(sread_fb "$T11C" auditor state)"
+assert_eq "T11 TS2 control coverage" 88      "$(sread_fb "$T11C" auditor coverage)"
+assert_eq "T11 TS2 control high"     0       "$(sread_fb "$T11C" auditor high)"
+assert_eq "T11 TS2 control blocking" 0       "$(sread_fb "$T11C" auditor blocking)"
+# a colon-bearing value must survive the anchored grep + the unchanged extraction sed.
+ua=$(sread_fb "$T11C" auditor updated_at)
+case "$ua" in *:*:*) ok "T11 TS2 control colon-value updated_at survives extraction [$ua]" ;; *) bad "T11 TS2 updated_at" "lost colons: [$ua]" ;; esac
+
+# TS3: re-assert TS1 under an explicit py=none PATH (bash+git only), when this host can form one.
+if [ "$NONE_OK" = 1 ]; then
+  vn=$(PATH="$NONEPATH" CLAUDE_PROJECT_DIR="$T11A" LIB="$LIB" bash "$LIBHELPER" sread auditor high 2>/dev/null || true)
+  assert_eq "T11 TS3 same fix under py=none PATH (high=0, NOT 9)" 0 "$vn"
+else
+  skipnote "T11 TS3 py=none PATH unavailable on this host (stub fallback already proven by TS1)"
+fi
+
+# TS4 MUTATION SENTINEL: delete the line-start anchor from the #STATUS_KEY_RE line and prove TS1's
+# fixture now MIS-reads 9 (mutant) while the real lib still reads 0 -> the anchor is load-bearing.
+MSR="$WORK/mut_status_read"; mkdir -p "$MSR"
+sed '/#STATUS_KEY_RE/ s/\^\[\[:space:\]\]\*//' "$LIB" > "$MSR/common.sh"
+if ! cmp -s "$LIB" "$MSR/common.sh"; then ok "T11 TS4 mutant differs from real lib (anchor removed by sed)"; else bad "T11 TS4 mutant" "sed no-op — sentinel would be vacuous"; fi
+sr_real=$(sread_fb "$T11A" auditor high "$LIB")
+sr_mut=$(sread_fb "$T11A" auditor high "$MSR/common.sh")
+if [ "$sr_real" = 0 ] && [ "$sr_mut" = 9 ]; then ok "T11 TS4 sentinel: real reads 0, unanchored mutant reads 9 -> line-start anchor load-bearing"; else bad "T11 TS4 sentinel" "real=$sr_real(want 0) mut=$sr_mut(want 9)"; fi
+echo ""
+
+# ===========================================================================
 tlog "all tiers done"
 echo "== ladder summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ] || exit 1

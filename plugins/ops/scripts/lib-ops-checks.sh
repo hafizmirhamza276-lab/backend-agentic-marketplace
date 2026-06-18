@@ -78,17 +78,30 @@ ops_o2() {
   root="$(_ops_root)"
   mk="$root/.claude-plugin/marketplace.json"
   [ -f "$mk" ] || return 0
-  # One record per plugin entry: "<name>\t<marketplace-version>\t<source>". The parser tracks the
-  # plugins[] array and anchors each key to LINE START, so the top-level marketplace "version" (it
-  # sits before the array) and the inline author "name" (its line starts with "author") are never
-  # mistaken for an entry's fields. Pretty-printed one-key-per-line JSON, as this repo emits.
+  # One record per plugin entry: "<name>\t<marketplace-version>\t<source>". ROBUSTNESS (external
+  # review): JSON key order / whitespace is NOT significant, so a reformatter (prettier / jq /
+  # `python -m json.tool`) may split a plugin's nested `"author": { "name": … }` onto its own
+  # indented line. A line-start "name" anchor ALONE would then read that author name AS a plugin —
+  # and, when the author block precedes the entry's "version", the real version is LOST (flushed
+  # empty) and mis-attributed to the author. So the parser tracks OBJECT-NESTING depth and captures a
+  # plugin field (name/version/source) ONLY at the plugin-object level (nest==0); a key inside a
+  # nested object (nest>0, e.g. author.name) is ignored. Nesting is detected STRUCTURALLY — a value
+  # that is exactly `{` at end-of-line opens a nested object, a lone `}`/`},` closes it — NEVER by
+  # counting raw braces, so a literal brace inside a description STRING can never skew it. A
+  # single-line `"author": { "name": … }` stays inert: its line starts with "author" (no field
+  # match) and is not a `{`-at-eol opener, so nest is unchanged. Pure awk, identical on every host
+  # (no jq/python dependency — a single deterministic path, not a jq-vs-fallback split). Assumes
+  # one-key-per-line pretty JSON (what this repo and every named reformatter emit); a fully compact
+  # single-line document is out of scope (it was for the previous parser too).
   entries="$(awk '
     function flush(){ if (name!="") printf "%s\t%s\t%s\n", name, ver, src; name=""; ver=""; src="" }
-    /"plugins"[[:space:]]*:[[:space:]]*\[/ { inarr=1; next }
-    inarr && /^[[:space:]]*\][[:space:]]*}?[[:space:]]*$/ { flush(); inarr=0; next }
-    inarr && /^[[:space:]]*"name"[[:space:]]*:/    { flush(); v=$0; sub(/^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"/,"",v); sub(/".*/,"",v); name=v; next }
-    inarr && /^[[:space:]]*"version"[[:space:]]*:/ { v=$0; sub(/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"/,"",v); sub(/".*/,"",v); ver=v; next }
-    inarr && /^[[:space:]]*"source"[[:space:]]*:/  { v=$0; sub(/^[[:space:]]*"source"[[:space:]]*:[[:space:]]*"/,"",v); sub(/".*/,"",v); src=v; next }
+    /"plugins"[[:space:]]*:[[:space:]]*\[/ { inarr=1; nest=0; next }
+    inarr && nest==0 && /^[[:space:]]*\][[:space:]]*[}]?[[:space:]]*,?[[:space:]]*$/ { flush(); inarr=0; next }
+    inarr && /^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*[{][[:space:]]*$/ { nest++; next }   #NEST_SKIP nested object opener
+    inarr && nest>0 && /^[[:space:]]*[}][[:space:]]*,?[[:space:]]*$/ { nest--; next }            # nested object close
+    inarr && nest==0 && /^[[:space:]]*"name"[[:space:]]*:/    { flush(); v=$0; sub(/^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"/,"",v); sub(/".*/,"",v); name=v; next }
+    inarr && nest==0 && /^[[:space:]]*"version"[[:space:]]*:/ { v=$0; sub(/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"/,"",v); sub(/".*/,"",v); ver=v; next }
+    inarr && nest==0 && /^[[:space:]]*"source"[[:space:]]*:/  { v=$0; sub(/^[[:space:]]*"source"[[:space:]]*:[[:space:]]*"/,"",v); sub(/".*/,"",v); src=v; next }
     END { flush() }
   ' "$mk" 2>/dev/null)"
   [ -n "$entries" ] || return 0
