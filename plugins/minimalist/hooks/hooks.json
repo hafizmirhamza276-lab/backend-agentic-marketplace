@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${CLAUDE_PLUGIN_ROOT}\"/hooks/minimalist-activate.js",
+            "commandWindows": "where node >nul 2>nul && node \"%CLAUDE_PLUGIN_ROOT%\\hooks\\minimalist-activate.js\" || exit /b 0",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${CLAUDE_PLUGIN_ROOT}\"/hooks/minimalist-turn.js",
+            "commandWindows": "where node >nul 2>nul && node \"%CLAUDE_PLUGIN_ROOT%\\hooks\\minimalist-turn.js\" || exit /b 0",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

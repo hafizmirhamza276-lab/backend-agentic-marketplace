@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "minimalist",
+  "displayName": "Minimal Code",
+  "version": "0.1.0",
+  "description": "Always-on \"write the least code that fully works\" discipline. A SessionStart hook injects the full decision LADDER (skills/minimal-code) and a UserPromptSubmit hook re-injects a compact reminder every turn so the agent ships the SMALLEST code that satisfies the requirement — never thousands of debug-hostile lines — WITHOUT cutting validation, error handling, security, or accessibility. Both hooks are node-guarded and fail-quiet (node is OPTIONAL: absent -> the hooks stay silent and the skill still works on demand; never a hard dependency), and they INJECT CONTEXT ONLY — they make no gate decision, so every gate in this marketplace stays pure shell/awk. Intensity off|lite|full|ultra via /minimize, mirrored into STATUS.json for the dashboard. YAGNI applies only to UNREQUESTED scope: anything the builder PLAN or the user mandates stays in-scope. Ladder adapted from Ponytail by Dietrich Gebert (MIT).",
+  "author": {
+    "name": "hafizmirhamza276-lab",
+    "email": "hafizmirhamza276@gmail.com"
+  },
+  "homepage": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "repository": "https://github.com/hafizmirhamza276-lab/backend-agentic-marketplace",
+  "license": "MIT",
+  "keywords": ["minimalism", "yagni", "least-code", "always-on", "context-injection", "ponytail", "backend", "agentic", "status-contract"]
+}
