@@ -29,6 +29,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUGMD="$(bd_bug)"
 [ -f "$BUGMD" ] || exit 0   # not a bug-fix session → no-op (doesn't disturb verify-build)
 
+PROJECT="$(bd_project_dir)"
 LEDGER="$(bd_bugfix_dir)/results.txt"
 AUTO_RUN="$(bd_setting auto_run_tests ask)"
 : "${REGR_TIMEOUT:=120}"
@@ -54,43 +55,65 @@ EXPECTED="$(awk '
   }
 ' "$BUGMD" 2>/dev/null)"
 
-norm_status() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    green|pass|passed|passing|ok|0|true) printf 'green' ;;
-    red|fail|failed|failing|error|1|false) printf 'red' ;;
-    *) printf 'unknown' ;;
-  esac
-}
 run_cmd() {  # run one test command, suppress output; exit status drives green/red
   if bd_have timeout; then timeout "$REGR_TIMEOUT" sh -c "$1" >/dev/null 2>&1
   else sh -c "$1" >/dev/null 2>&1; fi
 }
 
-STATUS_LINES=""   # normalized "<kind> <status>" per line
-add_status() { STATUS_LINES="${STATUS_LINES}$1 $(norm_status "$2")"$'\n'; }
+problems=0
+note() { printf '  - %s\n' "$*" >&2; problems=$((problems+1)); }
+
+# --- pre-fix RED capture + ledger persistence (external review F-C) -----------
+# The OLD auto path did `: > "$LEDGER"` then recorded ONLY the post-fix run, so a no-op /
+# always-green "repro" sailed through — red→green was never OBSERVED. We now PERSIST a pre-fix RED
+# for the repro and KEEP it in the ledger (we stop truncating it away), so the release gate
+# (verify-release.sh) can demand a real RED→GREEN TRANSITION rather than mere terminal green.
+# The pre-fix red comes from up to two kept sources:
+#   (1) a RECORDED PRE-EDIT RUN — any `repro … red` already in the ledger (an earlier Stop-gate
+#       firing while the repro still failed, or an orchestrator-recorded run): preserved verbatim.
+#   (2) AUTO mode only — an ACTIVE probe: set the fix aside with `git stash` and run the repro
+#       against the pre-fix tree. Best-effort and FULLY DEFENSIVE: only when git is present, we are
+#       inside a work tree, the tree is dirty (a fix to set aside) and NO recorded red exists yet;
+#       the stash is ALWAYS restored (a failed pop leaves the change safely in `git stash list` and
+#       merely warns). On ANY doubt the probe does nothing — it can neither corrupt the tree nor
+#       crash this advisory gate. (Test command-string side effects are the only edge — documented,
+#       and even then never fatal: the work is recoverable, the gate continues.)
+REPRO_CMD="$(printf '%s\n' "$EXPECTED" | awk -F'\t' '$1=="repro"{print $2; exit}')"
+PRIOR_REDS=""
+[ -f "$LEDGER" ] && PRIOR_REDS="$(awk '$1=="repro" && tolower($2) ~ /^(red|fail|failed|failing|error|1|false)$/ {print}' "$LEDGER" 2>/dev/null)"
 
 if [ "$AUTO_RUN" = "auto" ] && [ -n "$EXPECTED" ]; then
-  # Run every parsed command ourselves and (re)write the ledger as the record.
   mkdir -p "$(bd_bugfix_dir)" 2>/dev/null || true
-  : > "$LEDGER" 2>/dev/null || true
+  PROBE_RED=""
+  if [ -z "$PRIOR_REDS" ] && [ -n "$REPRO_CMD" ] && bd_have git \
+     && git -C "$PROJECT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+     && [ -n "$(git -C "$PROJECT" status --porcelain 2>/dev/null)" ]; then
+    if git -C "$PROJECT" stash push -q -m "regression-gate F-C pre-fix probe" >/dev/null 2>&1; then
+      run_cmd "$REPRO_CMD" || PROBE_RED="$(printf 'repro\tred\t%s' "$REPRO_CMD")"   # repro RED on the pre-fix tree
+      git -C "$PROJECT" stash pop -q >/dev/null 2>&1 \
+        || bd_warn "regression-gate: could not auto-restore the pre-fix stash — your changes are SAFE in 'git stash list'; run 'git stash pop' manually."
+    fi
+  fi
+  # Rewrite the ledger: kept pre-fix RED(s) FIRST (the transition evidence), then THIS run's rows.
+  # We never blindly `: > "$LEDGER"` anymore — that truncation is exactly what dropped the red (F-C).
+  {
+    [ -n "$PRIOR_REDS" ] && printf '%s\n' "$PRIOR_REDS"   #PREFIX_RED_KEEP carry the recorded pre-fix red forward
+    [ -n "$PROBE_RED" ]  && printf '%s\n' "$PROBE_RED"
+    true
+  } > "$LEDGER" 2>/dev/null || true
   while IFS=$'\t' read -r kind cmd; do
     [ -n "${kind:-}" ] && [ -n "${cmd:-}" ] || continue
     if run_cmd "$cmd"; then st=green; else st=red; fi
-    add_status "$kind" "$st"
     printf '%s\t%s\t%s\n' "$kind" "$st" "$cmd" >> "$LEDGER" 2>/dev/null || true
   done <<EOF
 $EXPECTED
 EOF
-elif [ -f "$LEDGER" ]; then
-  # Read recorded results (orchestrator ran the tests with the user's confirmation).
-  while read -r kind st _rest; do
-    [ -n "${kind:-}" ] || continue
-    case "$kind" in repro|char|linked) add_status "$kind" "$st" ;; esac
-  done < "$LEDGER"
 fi
+# (ask/never mode: the orchestrator recorded the ledger — including any pre-fix red — and we read it
+#  as-is below; we must NOT discard that red, so there is no truncation on this path either.)
 
 # --- nothing to evaluate -----------------------------------------------------
-if [ -z "$STATUS_LINES" ]; then
+if [ ! -s "$LEDGER" ]; then
   msg="regression gate could not verify red→green: no recorded results at .claude/builder/bugfix/results.txt (auto_run_tests=$AUTO_RUN). Run the repro + characterization tests and record results, or set auto_run_tests=auto."
   if [ -n "$EXPECTED" ]; then
     printf '%s\n' "$msg" >&2
@@ -101,18 +124,31 @@ if [ -z "$STATUS_LINES" ]; then
   bd_warn "$msg"; exit 0
 fi
 
-# --- evaluate ----------------------------------------------------------------
-repro_total=$(printf '%s\n' "$STATUS_LINES" | awk 'NF&&$1=="repro"{n++}END{print n+0}')
-repro_green=$(printf '%s\n' "$STATUS_LINES" | awk 'NF&&$1=="repro"&&$2=="green"{n++}END{print n+0}')
-cl_total=$(printf '%s\n' "$STATUS_LINES"   | awk 'NF&&($1=="char"||$1=="linked"){n++}END{print n+0}')
-cl_red=$(printf '%s\n' "$STATUS_LINES"     | awk 'NF&&($1=="char"||$1=="linked")&&$2=="red"{n++}END{print n+0}')
-
-problems=0
-note() { printf '  - %s\n' "$*" >&2; problems=$((problems+1)); }
+# --- evaluate (CURRENT health) -----------------------------------------------
+# Verdict keys on the LATEST status per repro/char/linked command — a historical `repro red` is
+# EVIDENCE of the pre-fix state, not a current failure. (verify-release.sh additionally enforces the
+# red→green TRANSITION before release; this Stop gate checks current health and persists the red.)
+COUNTS="$(awk '
+  function norm(s){ s=tolower(s);
+    if (s ~ /^(green|pass|passed|passing|ok|0|true)$/)  return "green";
+    if (s ~ /^(red|fail|failed|failing|error|1|false)$/) return "red";
+    return "unknown" }
+  { k=$1; st=norm($2);
+    id=""; for(i=3;i<=NF;i++) id=id (i>3?" ":"") $i
+    if (k=="repro")                  { rlatest[id]=st; rseen[id]=1 }
+    else if (k=="char"||k=="linked") { clatest[id]=st } }
+  END{
+    for (x in rseen)   { rt++; if (rlatest[x]!="green") rng++ }
+    for (y in clatest) { if (clatest[y]=="red") cr++ }
+    printf "%d %d %d", rt+0, rng+0, cr+0 }
+' "$LEDGER" 2>/dev/null)"
+# shellcheck disable=SC2086
+set -- $COUNTS
+repro_total="${1:-0}"; repro_not_green="${2:-0}"; cl_red="${3:-0}"
 
 if [ "$repro_total" -eq 0 ]; then
   note "no reproduction result recorded — the failing repro is the cornerstone of the fix; capture and run it."
-elif [ "$repro_green" -lt "$repro_total" ] || [ "$repro_green" -eq 0 ]; then
+elif [ "$repro_not_green" -gt 0 ]; then
   note "reproduction is NOT green (still RED) — red→green not achieved, so the bug is not proven fixed."
 fi
 if [ "$cl_red" -gt 0 ]; then
@@ -120,7 +156,7 @@ if [ "$cl_red" -gt 0 ]; then
 fi
 
 if [ "$problems" -eq 0 ]; then
-  bd_say "regression gate passed: repro red→green ✓; characterization/linked green ✓ (${cl_total} pinned)."
+  bd_say "regression gate passed: repro green (red→green kept in the ledger) ✓; characterization/linked green ✓."
   exit 0
 fi
 

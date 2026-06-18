@@ -88,14 +88,20 @@ audit_d1() {
     | sort -u | while IFS= read -r file; do
     [ -f "$file" ] || continue
     rel="$(_audit_rel "$root" "$file")"
-    # (a) `command -v python3` as a presence test (skip comment lines + the resolver's own note)
-    awk '!/^[[:space:]]*#/ && /command -v python3/ {print FNR}' "$file" 2>/dev/null | while IFS= read -r n; do
-      _audit_emit HIGH d1-fail-open "$rel:$n" "uses 'command -v python3' as a presence test — the Windows Store python3 stub passes it and the gate fails open (F1); resolve a WORKING interpreter (bd_resolve_python/bd_have_python)"
+    # (a) `command -v python<N>` (optionally quoted) as a presence test — BROADENED beyond the
+    # literal `python3` (F-E: `command -v python`, `command -v python2`, `command -v "python3"` all
+    # evaded the old literal match). Skips comment lines + the resolver's own note. `command -v "$1"`
+    # (bd_have) never matches — the token after `-v ` must be a literal python interpreter name.
+    awk '!/^[[:space:]]*#/ && /command -v[[:space:]]+"?python[0-9]*"?/ {print FNR} #D1_CMDV_RE' "$file" 2>/dev/null | while IFS= read -r n; do
+      _audit_emit HIGH d1-fail-open "$rel:$n" "uses 'command -v python…' as a presence test — the Windows Store python stub passes it and the gate fails open (F1); resolve a WORKING interpreter (bd_resolve_python/bd_have_python)"
     done
-    # (b) raw python capture under set -e with no '|| fallback'
+    # (b) a value captured from a RAW interpreter command-substitution under `set -e` with no
+    # '|| fallback' — BROADENED to BOTH `$(…)` AND backtick `` `…` `` forms (F-E: the backtick form
+    # `var=`python …`` evaded the old $(-only match). A failed/stub interpreter aborts the hook
+    # before its check runs (F1).
     if grep -Eq '^[[:space:]]*set[[:space:]]+-[a-z]*e' "$file" 2>/dev/null; then
-      awk '!/^[[:space:]]*#/ && /=[[:space:]]*"?\$\(/ && (/python/ || /\$BD_PYTHON/) && !/\|\|/ {print FNR}' "$file" 2>/dev/null | while IFS= read -r n; do
-        _audit_emit HIGH d1-fail-open "$rel:$n" "captures a value from a raw python/\$BD_PYTHON \$(…) under 'set -e' with no '|| fallback' — a failed/stub interpreter aborts the hook before its check runs (F1)"
+      awk '!/^[[:space:]]*#/ && /=[[:space:]]*"?(\$\(|`)/ && (/python/ || /\$BD_PYTHON/) && !/\|\|/ {print FNR}' "$file" 2>/dev/null | while IFS= read -r n; do
+        _audit_emit HIGH d1-fail-open "$rel:$n" "captures a value from a raw python/\$BD_PYTHON command-substitution (\$(…) or backticks) under 'set -e' with no '|| fallback' — a failed/stub interpreter aborts the hook before its check runs (F1)"
       done
     fi
   done
@@ -111,10 +117,15 @@ audit_d2() {
   _audit_hook_records | awk -F'\t' '$1=="PreToolUse" && $3!=""{print $3}' | sort -u | while IFS= read -r script; do
     [ -f "$script" ] || continue
     rel="$(_audit_rel "$root" "$script")"
-    # A path guard reads a path field; if it never normalizes, its allow-zone test is raw.
+    # A path guard reads a path field; its allow-zone test must run on a NORMALIZED path. BROADENED
+    # (F-E): the old check accepted mere TOKEN PRESENCE of `bd_normalize_path` (`grep -q`), so a guard
+    # that only MENTIONS it in a comment — while still matching its allow-zone against a RAW path —
+    # evaded the detector. We now require a real, NON-COMMENT ASSIGNMENT from bd_normalize_path
+    # (`var=…bd_normalize_path…`): a comment-only mention, or no normalization at all, fires. (The
+    # marker line below is the load-bearing one the test ladder's sentinel reverts.)
     if grep -Eq 'file_path|notebook_path|tool_input' "$script" 2>/dev/null \
-       && ! grep -q 'bd_normalize_path' "$script" 2>/dev/null; then
-      _audit_emit HIGH d2-traversal "$rel" "PreToolUse guard matches its allow-zone on a raw, un-normalized path (no bd_normalize_path) — a '..' or backslash segment escapes the zone (F2)"
+       && ! grep -Eq '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*bd_normalize_path' "$script" 2>/dev/null; then   #D2_NORM_RE
+      _audit_emit HIGH d2-traversal "$rel" "PreToolUse guard matches its allow-zone on a raw, un-normalized path (bd_normalize_path is never assigned to the checked variable — only mentioned, or absent) — a '..' or backslash segment escapes the zone (F2)"
     fi
   done
 }
@@ -292,6 +303,31 @@ audit_d9() {
 }
 
 # ===========================================================================
+# D10 — bash-bypass (HIGH, F-A): a PreToolUse WRITE-DISCIPLINE plugin (one whose PreToolUse wires
+# guard-scope / guard-readonly / guard-bugfix) that has NO PreToolUse `Bash` matcher. Those write
+# guards only match Write|Edit|MultiEdit|NotebookEdit, so a Bash command (sed -i, >, tee, cp, mv,
+# dd, truncate, install, ln) mutates files straight PAST them. Closing the hole needs a PreToolUse
+# `Bash` matcher wiring a guard-bash-write.sh. Plugins with no write-discipline guard are not judged.
+# ===========================================================================
+audit_d10() {
+  local root rel plug; root="$(_audit_root)"
+  _audit_hook_records | awk -F'\t' '
+    $1=="PreToolUse" && $3!="" {
+      p=$3; sub(/.*\/plugins\//,"",p); sub(/\/.*/,"",p)        # plugin = the path component after /plugins/
+      if (p=="") next
+      seen[p]=1
+      if ($3 ~ /guard-(scope|readonly|bugfix)\.sh$/) wd[p]=1   # this plugin enforces write discipline
+      if ($2 ~ /Bash/) bash[p]=1                               # …and has a PreToolUse Bash matcher
+    }
+    END{ for (p in seen) if (wd[p] && !(p in bash)) print p }  #D10_BYPASS_RE
+  ' | sort -u | while IFS= read -r plug; do
+    [ -n "$plug" ] || continue
+    rel="plugins/$plug/hooks/hooks.json"
+    _audit_emit HIGH d10-bash-bypass "$rel" "PreToolUse write-discipline plugin '$plug' wires guard-scope/guard-readonly/guard-bugfix but has NO PreToolUse 'Bash' matcher — a Bash command (sed -i, >, tee, cp, mv, dd, truncate, install, ln) mutates files straight past the write guard (F-A); add a PreToolUse Bash matcher wiring guard-bash-write.sh"
+  done
+}
+
+# ===========================================================================
 # ADVISORY — informational only. NEVER gates and is EXCLUDED from the high/med/low tally by
 # verify-audit.sh. These are the "fuzzy" findings whose static signal is weak enough that
 # gating on them would risk false-blocking: doc drift (F5), redundant agent tools (F12),
@@ -345,7 +381,7 @@ audit_shellcheck() {
 # Run every detector. Order is HIGH-class first for readable streaming output; verify-audit.sh
 # re-tallies by severity regardless of order.
 audit_run_all() {
-  audit_d1; audit_d2; audit_d6; audit_d7; audit_d8        # HIGH class
+  audit_d1; audit_d2; audit_d6; audit_d7; audit_d8; audit_d10   # HIGH class
   audit_d3; audit_d4; audit_d5; audit_d6b                 # MEDIUM class
   audit_d9                                                # LOW class
   audit_advisory; audit_shellcheck                        # ADVISORY + lint

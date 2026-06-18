@@ -4,7 +4,7 @@ description: Depth-first critical auditor. Use to reason hard about the few risk
 model: opus
 effort: high
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: audit-codebase, classify-findings
 ---
 

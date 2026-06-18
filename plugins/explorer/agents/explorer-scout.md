@@ -4,7 +4,7 @@ description: Breadth-first codebase scout. Use to map structure, entry points, d
 model: sonnet
 effort: medium
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: explore-codebase
 ---
 

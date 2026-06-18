@@ -75,6 +75,21 @@ write_session() {  # <plugindir> <script> <withto:1|0>
   } > "$1/hooks/hooks.json"
 }
 
+# write_pre_with_bash <plugindir> <writeguard.sh> : a PreToolUse hooks.json with BOTH a
+# Write|Edit|MultiEdit|NotebookEdit matcher (the write guard) AND a Bash matcher (guard-bash-write).
+write_pre_with_bash() {
+  mkdir -p "$1/hooks"
+  {
+    printf '{\n  "hooks": {\n    "PreToolUse": [\n      {\n'
+    printf '        "matcher": "Write|Edit|MultiEdit|NotebookEdit",\n        "hooks": [\n          {\n'
+    printf '            "type": "command",\n            "command": "\\"${CLAUDE_PLUGIN_ROOT}\\"/scripts/%s",\n            "timeout": 10\n' "$2"
+    printf '          }\n        ]\n      },\n      {\n'
+    printf '        "matcher": "Bash",\n        "hooks": [\n          {\n'
+    printf '            "type": "command",\n            "command": "\\"${CLAUDE_PLUGIN_ROOT}\\"/scripts/guard-bash-write.sh",\n            "timeout": 10\n'
+    printf '          }\n        ]\n      }\n    ]\n  }\n}\n'
+  } > "$1/hooks/hooks.json"
+}
+
 echo "== auditor test ladder =="
 echo "ROOT=$ROOT"
 HOSTPY=no; for c in python3 python "py -3"; do if $c -c "pass" >/dev/null 2>&1; then HOSTPY=yes; break; fi; done
@@ -85,7 +100,7 @@ echo ""
 # TIER 1 — SILENT on the real (clean) repo.
 # ===========================================================================
 echo "-- tier 1: SILENT on clean repo --"
-for fn in audit_d1 audit_d2 audit_d3 audit_d4 audit_d5 audit_d6 audit_d6b audit_d7 audit_d8 audit_d9; do
+for fn in audit_d1 audit_d2 audit_d3 audit_d4 audit_d5 audit_d6 audit_d6b audit_d7 audit_d8 audit_d9 audit_d10; do
   out=$(run_det "$fn" "$ROOT")
   n=$(printf '%s\n' "$out" | grep -cE "^(HIGH|MEDIUM|LOW)$TAB" 2>/dev/null || true)
   assert_eq "T1 $fn silent on clean repo (0 findings)" 0 "$n"
@@ -115,6 +130,15 @@ out=$(run_det audit_d1 "$F"); has "$out" HIGH d1-fail-open && ok "T2 D1 fires HI
 # D1 silent — same guard without the presence test.
 printf '#!/usr/bin/env bash\nset -uo pipefail\necho clean\n' > "$WORK/d1/plugins/p/scripts/guard.sh"
 out=$(run_det audit_d1 "$F"); n=$(cnt "$out" HIGH d1-fail-open); assert_eq "T2 D1 silent without it" 0 "$n"
+# D1 BROADENED (F-E): `command -v python` (NO version digit) — the old literal `python3` match missed it.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nif command -v python >/dev/null 2>&1; then echo ok; fi\n[ -n "$file_path" ]\n' > "$WORK/d1/plugins/p/scripts/guard.sh"
+out=$(run_det audit_d1 "$F"); has "$out" HIGH d1-fail-open && ok "T2 D1 fires on 'command -v python' (no version digit) (F-E)" || bad "T2 D1 cmd-v broadened" "no HIGH; got: $out"
+# D1 BROADENED (F-E): a BACKTICK interpreter capture under set -e with no '||' — the old $(-only match missed it.
+printf '#!/usr/bin/env bash\nset -e\nv=`python -c "print(1)"`\necho "$v"\n' > "$WORK/d1/plugins/p/scripts/guard.sh"
+out=$(run_det audit_d1 "$F"); has "$out" HIGH d1-fail-open && ok "T2 D1 fires on a BACKTICK python capture under set -e (F-E)" || bad "T2 D1 backtick broadened" "no HIGH; got: $out"
+# D1 silent control — a backtick python capture WITH a '|| fallback' is safe.
+printf '#!/usr/bin/env bash\nset -e\nv=`python -c "print(1)"` || v=""\necho "$v"\n' > "$WORK/d1/plugins/p/scripts/guard.sh"
+out=$(run_det audit_d1 "$F"); n=$(cnt "$out" HIGH d1-fail-open); assert_eq "T2 D1 silent on a backtick capture WITH '|| fallback'" 0 "$n"
 
 # D2 (HIGH) — PreToolUse guard reads file_path but never bd_normalize_path.
 F="$WORK/d2"; mkdir -p "$F/plugins/p/scripts"
@@ -124,6 +148,10 @@ out=$(run_det audit_d2 "$F"); has "$out" HIGH d2-traversal && ok "T2 D2 fires HI
 # D2 silent — add bd_normalize_path.
 printf '#!/usr/bin/env bash\nr="$(bd_normalize_path "$file_path")"; case "$r" in .claude/*) exit 0;; esac\nexit 2\n' > "$F/plugins/p/scripts/guard.sh"
 out=$(run_det audit_d2 "$F"); n=$(cnt "$out" HIGH d2-traversal); assert_eq "T2 D2 silent with bd_normalize_path" 0 "$n"
+# D2 BROADENED (F-E): bd_normalize_path only MENTIONED in a comment (never ASSIGNED) while the
+# allow-zone is matched on a RAW path — the old token-presence `grep -q` was fooled; now it fires.
+printf '#!/usr/bin/env bash\n# this guard uses bd_normalize_path (it does not, really)\nt="$file_path"; case "$t" in .claude/*) exit 0;; esac\nexit 2\n' > "$F/plugins/p/scripts/guard.sh"
+out=$(run_det audit_d2 "$F"); has "$out" HIGH d2-traversal && ok "T2 D2 fires on a COMMENT-ONLY bd_normalize_path mention (F-E)" || bad "T2 D2 comment-only broadened" "no HIGH; got: $out"
 
 # D6 (HIGH) — hooks.json points at a missing script.
 F="$WORK/d6"; mkdir -p "$F/plugins/p/scripts"
@@ -148,6 +176,18 @@ out=$(run_det audit_d8 "$F"); has "$out" HIGH d8-lib-drift && ok "T2 D8 fires HI
 # D8 silent — identical.
 cp "$LIB" "$F/plugins/p/lib/common.sh"
 out=$(run_det audit_d8 "$F"); n=$(cnt "$out" HIGH d8-lib-drift); assert_eq "T2 D8 silent when in sync" 0 "$n"
+
+# D10 (HIGH, F-A) — a write-discipline plugin (guard-scope) with NO PreToolUse Bash matcher.
+F="$WORK/d10"; mkdir -p "$F/plugins/p/scripts"
+write_pre "$F/plugins/p" "Write|Edit|MultiEdit|NotebookEdit" "guard-scope.sh" 1
+out=$(run_det audit_d10 "$F"); has "$out" HIGH d10-bash-bypass && ok "T2 D10 fires HIGH on write-guard plugin with no Bash matcher" || bad "T2 D10" "no HIGH; got: $out"
+# D10 silent — once a PreToolUse Bash matcher is wired.
+write_pre_with_bash "$F/plugins/p" "guard-scope.sh"
+out=$(run_det audit_d10 "$F"); n=$(cnt "$out" HIGH d10-bash-bypass); assert_eq "T2 D10 silent once a Bash matcher is wired" 0 "$n"
+# D10 silent — a plugin with NO write-discipline guard is not judged (a missing Bash matcher is fine).
+F2="$WORK/d10nb"; mkdir -p "$F2/plugins/q/scripts"
+write_pre "$F2/plugins/q" "Write|Edit|MultiEdit|NotebookEdit" "lint-feedback.sh" 1
+out=$(run_det audit_d10 "$F2"); n=$(cnt "$out" HIGH d10-bash-bypass); assert_eq "T2 D10 silent on a non-write-discipline plugin (not judged)" 0 "$n"
 
 # D3 (MEDIUM) — matcher omits NotebookEdit.
 F="$WORK/d3"; mkdir -p "$F/plugins/p/scripts"
@@ -300,21 +340,39 @@ echo ""
 # ===========================================================================
 echo "-- tier 7: MUTATION SENTINELS --"
 MUT="$WORK/mut-checks.sh"
-# Neuter D2 (drop the !bd_normalize_path guard -> never fires) AND D8 (force diff -q success).
-sed -e 's#! grep -q .bd_normalize_path. "\$script" 2>/dev/null#false#' \
+# Neuter D2 (broadened non-comment-assignment check -> never fires), D8 (force diff -q success),
+# D10 (invert the bash-matcher test), and D1 (revert the broadened `command -v python<N>` to the
+# literal `python3`). One MUT carries every sentinel mutation.
+sed -e '/#D2_NORM_RE/ s#! grep -Eq [^;]*2>/dev/null#false#' \
+    -e '/#D1_CMDV_RE/ s/python\[0-9\]\*/python3/' \
     -e 's#diff -q "\$canon" "\$f" >/dev/null 2>&1 || #true || #' \
+    -e '/#D10_BYPASS_RE/ s#!(p in bash)#(p in bash)#' \
     "$CHECKS" > "$MUT"
-# D2 fixture the REAL detector catches (and the mutant must miss):
+# D2 sentinel — a COMMENT-ONLY bd_normalize_path mention (the F-E evasion): the REAL broadened
+# detector catches it; the neutered mutant must miss it.
 mkdir -p "$WORK/mut2/plugins/p/scripts"; write_pre "$WORK/mut2/plugins/p" "Write|Edit|MultiEdit|NotebookEdit" "guard.sh" 1
-printf '#!/usr/bin/env bash\ncase "$file_path" in .claude/*) exit 0;; esac\nexit 2\n' > "$WORK/mut2/plugins/p/scripts/guard.sh"
+printf '#!/usr/bin/env bash\n# normalized with bd_normalize_path (not really)\ncase "$file_path" in .claude/*) exit 0;; esac\nexit 2\n' > "$WORK/mut2/plugins/p/scripts/guard.sh"
 realD2=$(run_det audit_d2 "$WORK/mut2")
 mutD2=$(AUDIT_ROOT="$WORK/mut2" CHECKS="$MUT" bash -c '. "$LIB"; . "$MUT"; audit_d2' 2>/dev/null || true)
-if has "$realD2" HIGH d2-traversal && ! has "$mutD2" HIGH d2-traversal; then ok "T7 D2 sentinel: real fires, mutant silent -> normalize-check load-bearing"; else bad "T7 D2 sentinel" "real=[$realD2] mut=[$mutD2]"; fi
+if has "$realD2" HIGH d2-traversal && ! has "$mutD2" HIGH d2-traversal; then ok "T7 D2 sentinel: real fires on comment-only normalize, mutant silent -> broadened normalize-check load-bearing"; else bad "T7 D2 sentinel" "real=[$realD2] mut=[$mutD2]"; fi
+# D1 sentinel — revert the broadened `command -v python<N>` to literal `python3`: a `command -v python`
+# (no digit) guard the REAL detector catches must be MISSED by the mutant.
+mkdir -p "$WORK/mut1/plugins/p/scripts"; write_pre "$WORK/mut1/plugins/p" "Write|Edit|MultiEdit|NotebookEdit" "guard.sh" 1
+printf '#!/usr/bin/env bash\nset -uo pipefail\nif command -v python >/dev/null 2>&1; then echo ok; fi\n[ -n "$file_path" ]\n' > "$WORK/mut1/plugins/p/scripts/guard.sh"
+realD1=$(run_det audit_d1 "$WORK/mut1")
+mutD1=$(AUDIT_ROOT="$WORK/mut1" CHECKS="$MUT" bash -c '. "$LIB"; . "$MUT"; audit_d1' 2>/dev/null || true)
+if has "$realD1" HIGH d1-fail-open && ! has "$mutD1" HIGH d1-fail-open; then ok "T7 D1 sentinel: real fires on 'command -v python', mutant (literal python3) silent -> broadening load-bearing"; else bad "T7 D1 sentinel" "real=[$realD1] mut=[$mutD1]"; fi
 # D8 sentinel
 mkdir -p "$WORK/mut8/shared/lib" "$WORK/mut8/plugins/p/lib"; cp "$LIB" "$WORK/mut8/shared/lib/common.sh"; printf '# DRIFT\n' > "$WORK/mut8/plugins/p/lib/common.sh"
 realD8=$(run_det audit_d8 "$WORK/mut8")
 mutD8=$(AUDIT_ROOT="$WORK/mut8" CHECKS="$MUT" bash -c '. "$LIB"; . "$MUT"; audit_d8' 2>/dev/null || true)
 if has "$realD8" HIGH d8-lib-drift && ! has "$mutD8" HIGH d8-lib-drift; then ok "T7 D8 sentinel: real fires, mutant silent -> diff load-bearing"; else bad "T7 D8 sentinel" "real=[$realD8] mut=[$mutD8]"; fi
+# D10 sentinel — invert the bash-matcher test (!(p in bash) -> (p in bash)) and prove a write-guard
+# plugin with no Bash matcher, which the real detector catches, is missed by the mutant.
+mkdir -p "$WORK/mut10/plugins/p/scripts"; write_pre "$WORK/mut10/plugins/p" "Write|Edit|MultiEdit|NotebookEdit" "guard-scope.sh" 1
+realD10=$(run_det audit_d10 "$WORK/mut10")
+mutD10=$(AUDIT_ROOT="$WORK/mut10" CHECKS="$MUT" bash -c '. "$LIB"; . "$MUT"; audit_d10' 2>/dev/null || true)
+if has "$realD10" HIGH d10-bash-bypass && ! has "$mutD10" HIGH d10-bash-bypass; then ok "T7 D10 sentinel: real fires, mutant silent -> bash-matcher check load-bearing"; else bad "T7 D10 sentinel" "real=[$realD10] mut=[$mutD10]"; fi
 echo ""
 
 echo "== auditor ladder summary: $PASS passed, $FAIL failed =="

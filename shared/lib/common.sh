@@ -56,6 +56,28 @@ bd_git_head() {
   fi
 }
 
+# bd_tree_digest : a stable digest of the CURRENT working tree's SOURCE state — the HEAD commit plus a
+# hash of every uncommitted change (the tracked diff vs HEAD + the porcelain status for untracked
+# files), EXCLUDING the gate's own .claude/ bookkeeping (module STATUS/memory, which is expected to be
+# untracked in real projects and in the test fixtures alike, and must NOT count as a source change).
+# A module STATUS records this so the release gate can FAIL a later STALE-but-green release — a prior
+# green run must not certify new/uncommitted code (external review F-B). Prints "unknown" when git is
+# unavailable / not a work tree; the release gate treats that conservatively (its dirty check still runs).
+bd_tree_digest() {
+  bd_have git || { printf 'unknown'; return; }
+  local dir head body
+  dir="$(bd_project_dir)"
+  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { printf 'unknown'; return; }
+  head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || printf 'nohead')"
+  # `diff HEAD` = the CONTENT of every tracked change; `status --porcelain` = the rest (incl. untracked
+  # file names). Both scoped with a `.claude` exclusion so the gate's own state never reads as a source
+  # change. The combined stream is hashed by git's own object hasher (always present when git is).
+  body="$( { git -C "$dir" diff HEAD -- . ':(exclude).claude' 2>/dev/null
+             git -C "$dir" status --porcelain -- . ':(exclude).claude' 2>/dev/null
+           } | git -C "$dir" hash-object --stdin 2>/dev/null || printf 'nohash' )"
+  printf '%s' "$head:$body"
+}
+
 # --- settings ----------------------------------------------------------------
 # bd_setting_at <file> <key> <default> : read a top-level key from ANY settings JSON, using
 # the working python when present and a crude grep fallback otherwise (so it never DEPENDS
@@ -76,10 +98,42 @@ except Exception:
     print(default)
 PY
   else
-    # crude grep fallback: "key": value
+    # Pure-shell fallback — NESTING-AWARE (external review F-D). The OLD fallback was an UNANCHORED
+    # grep|head -n1, so a nested key SHADOWED the real top-level one (e.g.
+    # {"profiles":{"enforce_release":false}, "enforce_release":true} read `false`) — a FAIL-OPEN for
+    # enforce_*/require_reproduction on a python-less host (the gate silently stopped enforcing). We
+    # canNOT line-start-anchor like bd_status_read does: settings.json is USER-controlled, so keys may
+    # be indented arbitrarily and reordered. Instead, mirror ops_o2 — track STRUCTURAL object/array
+    # depth: the root object's `{` opens depth 1, so a genuine TOP-LEVEL key sits at depth==1; a key
+    # nested inside any object/array is at depth>1 and is IGNORED. Depth is detected STRUCTURALLY — a
+    # line whose value ends in `{`/`[` opens a level, a lone `}`/`]` (optional trailing comma) closes
+    # one — NEVER by counting raw braces, so a brace inside a quoted value can't skew it. The key is
+    # compared as a STRING (not a regex), so the match is whitespace/key-order/value-format agnostic and
+    # injection-proof. Assumes one-key-per-line pretty JSON (what python json.dump(indent=2)/jq/prettier
+    # and this tool all emit); a fully compact single-line document is out of scope (the same documented
+    # limit as ops_o2) and simply yields the default — the advisory / fail-SAFE direction.
     local v
-    v=$(grep -oE "\"$key\"[[:space:]]*:[[:space:]]*[^,}]+" "$file" 2>/dev/null \
-        | head -n1 | sed -E "s/.*:[[:space:]]*//; s/\"//g; s/[[:space:]]+$//")
+    v=$(awk -v want="$key" '
+      BEGIN { depth=0; found=0 }
+      {
+        line=$0
+        if (!found && depth==1 && match(line, /^[[:space:]]*"[^"]*"[[:space:]]*:/)) {   #SETTING_DEPTH_RE
+          k=line; sub(/^[[:space:]]*"/,"",k); sub(/".*/,"",k)            # the quoted key name on this line
+          if (k==want) {
+            v=line
+            sub(/^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*/,"",v)    # strip indent + key + colon
+            sub(/[[:space:]]*,[[:space:]]*$/,"",v)                       # drop a trailing JSON comma
+            sub(/[[:space:]]+$/,"",v)                                    # drop trailing whitespace
+            gsub(/"/,"",v)                                               # drop quotes (mirror the old sed)
+            val=v; found=1
+          }
+        }
+        # Structural depth AFTER the key check (an opener on THIS line raises depth for SUBSEQUENT lines).
+        if (line ~ /[{[][[:space:]]*$/)                                 depth++
+        else if (line ~ /^[[:space:]]*[]}][[:space:]]*,?[[:space:]]*$/) depth--
+      }
+      END { if (found) printf "%s", val }
+    ' "$file" 2>/dev/null)
     printf '%s' "${v:-$def}"
   fi
 }

@@ -36,6 +36,10 @@ export ROOT
 
 GUARD_READONLY="$ROOT/plugins/explorer/scripts/guard-readonly.sh"
 GUARD_SCOPE="$ROOT/plugins/builder/scripts/guard-scope.sh"
+GUARD_BUGFIX="$ROOT/plugins/builder/scripts/guard-bugfix.sh"
+REGRESSION_GATE="$ROOT/plugins/builder/scripts/regression-gate.sh"
+GUARD_BASH_B="$ROOT/plugins/builder/scripts/guard-bash-write.sh"
+GUARD_BASH_E="$ROOT/plugins/explorer/scripts/guard-bash-write.sh"
 VERIFY_RELEASE="$ROOT/plugins/pipeline/scripts/verify-release.sh"
 LIB="$ROOT/shared/lib/common.sh"
 export LIB
@@ -95,8 +99,9 @@ cat > "$LIBHELPER" <<'BASH'
 . "$LIB"
 cmd="$1"; shift
 case "$cmd" in
-  swrite) bd_status_write "$@" ;;
-  sread)  bd_status_read "$@" ;;
+  swrite)     bd_status_write "$@" ;;
+  sread)      bd_status_read "$@" ;;
+  setting_at) bd_setting_at "$@" ;;
   *) exit 9 ;;
 esac
 BASH
@@ -745,6 +750,221 @@ if ! cmp -s "$LIB" "$MSR/common.sh"; then ok "T11 TS4 mutant differs from real l
 sr_real=$(sread_fb "$T11A" auditor high "$LIB")
 sr_mut=$(sread_fb "$T11A" auditor high "$MSR/common.sh")
 if [ "$sr_real" = 0 ] && [ "$sr_mut" = 9 ]; then ok "T11 TS4 sentinel: real reads 0, unanchored mutant reads 9 -> line-start anchor load-bearing"; else bad "T11 TS4 sentinel" "real=$sr_real(want 0) mut=$sr_mut(want 9)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 12 — REGRESSION: bd_setting_at's PURE-SHELL fallback must be NESTING-AWARE (external review
+# F-D). The fallback key grep was UNANCHORED (grep|head -n1), so a NESTED key SHADOWED the real
+# TOP-LEVEL one: {"profiles":{"enforce_release":false}, "enforce_release":true} read `false`.
+# bd_release_enforce / bd_enforce / bd_*_enforce + require_reproduction ALL read through
+# bd_setting_at, so on a python-less host the shadow makes the gate read enforce_release=false when
+# the user set it true — a FAIL-OPEN (enforcement silently turns OFF and an unsafe build releases).
+# settings.json is USER-controlled (keys may be indented/reordered), so — unlike bd_status_read — we
+# CANNOT line-start-anchor; instead the fallback tracks STRUCTURAL depth (mirroring ops_o2) and
+# accepts a key ONLY at depth==1. EVERY case forces the python-FREE fallback (FAKEBIN shadows python):
+# the bug is python-less ONLY (the python branch uses json.load and was always correct).
+#   TG1 (the fix)  nested "enforce_release":false BEFORE the real top-level "enforce_release":true ->
+#                  reads `true` (NOT the nested false). require_reproduction present ONLY nested ->
+#                  reads the DEFAULT (the nested value is invisible to a top-level read).
+#   TG2 (control)  plain top-level keys round-trip via the fallback: bare bool, quoted bool (quotes
+#                  stripped), a comma-bearing string value, a number, and an absent key -> default.
+#   TG3            re-assert TG1 under an explicit py=none PATH (bash+git only), when available.
+#   TG4 (sentinel) neuter the depth guard (#SETTING_DEPTH_RE: depth==1 -> depth>=0) -> the nested key
+#                  now shadows -> TG1 mis-reads `false` -> the depth guard is load-bearing.
+# ===========================================================================
+tlog "tier12 start"; echo "-- tier 12: REGRESSION bd_setting_at fallback nesting-aware --"
+# setat_fb <file> <key> <def> [lib] : read a setting via the python-FREE fallback (FAKEBIN forces it).
+setat_fb() {
+  _f=$1; _k=$2; _d=$3; _lib=${4:-$LIB}
+  PATH="$FAKEBIN:$PATH" LIB="$_lib" bash "$LIBHELPER" setting_at "$_f" "$_k" "$_d" 2>/dev/null || true
+}
+# A nested key BEFORE the real top-level one (pretty JSON, one key per line — what every reformatter emits).
+SJ_ADV="$WORK/settings_adv.json"
+{
+  printf '{\n'
+  printf '  "profiles": {\n'
+  printf '    "enforce_release": false,\n'
+  printf '    "require_reproduction": false\n'
+  printf '  },\n'
+  printf '  "enforce_release": true\n'
+  printf '}\n'
+} > "$SJ_ADV"
+assert_eq "T12 TG1 nested enforce_release:false shadowed -> real top-level reads true" true "$(setat_fb "$SJ_ADV" enforce_release false)"
+assert_eq "T12 TG1 require_reproduction exists ONLY nested -> reads the default (invisible)" false "$(setat_fb "$SJ_ADV" require_reproduction false)"
+
+# TG2 control: plain top-level keys round-trip (bare bool, quoted bool, comma-bearing string, number, absent).
+SJ_CTL="$WORK/settings_ctl.json"
+{
+  printf '{\n'
+  printf '  "enforce_release": true,\n'
+  printf '  "feedback_enforce": "true",\n'
+  printf '  "label": "release, gate",\n'
+  printf '  "opus_loop_limit": 2\n'
+  printf '}\n'
+} > "$SJ_CTL"
+assert_eq "T12 TG2 control top-level bool"                true            "$(setat_fb "$SJ_CTL" enforce_release false)"
+assert_eq "T12 TG2 control quoted bool (quotes stripped)" true            "$(setat_fb "$SJ_CTL" feedback_enforce false)"
+assert_eq "T12 TG2 control comma-bearing string value"    "release, gate" "$(setat_fb "$SJ_CTL" label x)"
+assert_eq "T12 TG2 control number value"                  2               "$(setat_fb "$SJ_CTL" opus_loop_limit 0)"
+assert_eq "T12 TG2 control absent key -> default"         false           "$(setat_fb "$SJ_CTL" no_such_key false)"
+
+# TG3: re-assert TG1 under an explicit py=none PATH (bash+git only), when this host can form one.
+if [ "$NONE_OK" = 1 ]; then
+  vn=$(PATH="$NONEPATH" LIB="$LIB" bash "$LIBHELPER" setting_at "$SJ_ADV" enforce_release false 2>/dev/null || true)
+  assert_eq "T12 TG3 same fix under py=none PATH (enforce_release=true, NOT nested false)" true "$vn"
+else
+  skipnote "T12 TG3 py=none PATH unavailable on this host (stub fallback already proven by TG1)"
+fi
+
+# TG4 MUTATION SENTINEL: neuter the depth guard (depth==1 -> depth>=0) on the #SETTING_DEPTH_RE line
+# and prove TG1's fixture now mis-reads the nested `false` (mutant) while the real lib reads `true`.
+MSA="$WORK/mut_setting_at"; mkdir -p "$MSA"
+sed '/#SETTING_DEPTH_RE/ s/depth==1/depth>=0/' "$LIB" > "$MSA/common.sh"
+if ! cmp -s "$LIB" "$MSA/common.sh"; then ok "T12 TG4 mutant differs from real lib (depth guard neutered by sed)"; else bad "T12 TG4 mutant" "sed no-op — sentinel would be vacuous"; fi
+sa_real=$(setat_fb "$SJ_ADV" enforce_release false "$LIB")
+sa_mut=$(setat_fb "$SJ_ADV" enforce_release false "$MSA/common.sh")
+if [ "$sa_real" = true ] && [ "$sa_mut" = false ]; then ok "T12 TG4 sentinel: real reads true, depth-blind mutant reads false -> depth guard load-bearing"; else bad "T12 TG4 sentinel" "real=$sa_real(want true) mut=$sa_mut(want false)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 13 — REGRESSION: bug-fix RED→GREEN must be OBSERVED (external review F-C). Three holes let a
+# no-op / always-green "repro" pass the whole bug-fix net: (a) guard-bugfix.sh accepted ANY existing
+# file as the declared repro (not necessarily a TEST); (b) regression-gate.sh truncated the ledger
+# and kept only the post-fix run, discarding the pre-fix red; (c) verify-release.sh checked terminal
+# GREEN only. The fixes: (a) the declared repro must be a recognized test path (is_test_path); (b) the
+# gate PRESERVES the pre-fix red (stops truncating); (c) the release gate requires a real RED→GREEN
+# TRANSITION (a historical red AND a current green for the repro id), not just terminal green.
+# ===========================================================================
+tlog "tier13 start"; echo "-- tier 13: REGRESSION bug-fix red→green must be observed (F-C) --"
+
+# bugfix_guard <proj> <json> [script] : run guard-bugfix on a hook payload; print its exit code.
+bugfix_guard() {
+  _proj=$1; _json=$2; _scr=${3:-$GUARD_BUGFIX}; _rc=0
+  printf '%s' "$_json" | CLAUDE_PROJECT_DIR="$_proj" bash "$_scr" >/dev/null 2>&1 || _rc=$?
+  printf '%s' "$_rc"
+}
+
+# (a) guard-bugfix: the declared repro must be a recognized TEST path, not just any existing file.
+BGB=$(mkproj t13_bg_block); mkdir -p "$BGB/.claude/builder"
+printf '# BUG\n## Reproduction\n- Repro test: README.md\n' > "$BGB/.claude/builder/BUG.md"
+printf '# readme\n' > "$BGB/README.md"                                       # exists, but NOT a test path
+JBG=$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/src/app.py"}}' "$BGB")
+assert_eq "T13 BG1 non-test repro (README.md exists) -> guard-bugfix BLOCKS source edit exit 2" 2 "$(bugfix_guard "$BGB" "$JBG")"
+
+BGA=$(mkproj t13_bg_allow); mkdir -p "$BGA/.claude/builder" "$BGA/tests"
+printf '# BUG\n## Reproduction\n- Repro test: tests/test_bug.py\n' > "$BGA/.claude/builder/BUG.md"
+printf 'def test_x():\n    assert False\n' > "$BGA/tests/test_bug.py"          # a REAL recognized test path
+JBA=$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/src/app.py"}}' "$BGA")
+assert_eq "T13 BG2 control: recognized test-path repro -> source edit ALLOWED exit 0" 0 "$(bugfix_guard "$BGA" "$JBA")"
+
+# BG3 sentinel: drop the test-path requirement (#BUGFIX_REPRO_TESTPATH) -> the non-test repro is
+# again accepted, so BG1's edit now slips through -> the is_test_path requirement is load-bearing.
+MGB="$WORK/mut_guard_bugfix"; mkdir -p "$MGB/scripts" "$MGB/lib"; cp "$LIB" "$MGB/lib/common.sh"
+sed '/#BUGFIX_REPRO_TESTPATH/ s/is_test_path "$REPRO_DECL" && //' "$GUARD_BUGFIX" > "$MGB/scripts/guard-bugfix.sh"
+if ! cmp -s "$GUARD_BUGFIX" "$MGB/scripts/guard-bugfix.sh"; then ok "T13 BG3 mutant differs (test-path requirement removed by sed)"; else bad "T13 BG3 mutant" "sed no-op — sentinel would be vacuous"; fi
+bg_real=$(bugfix_guard "$BGB" "$JBG"); bg_mut=$(bugfix_guard "$BGB" "$JBG" "$MGB/scripts/guard-bugfix.sh")
+if [ "$bg_real" = 2 ] && [ "$bg_mut" = 0 ]; then ok "T13 BG3 sentinel: real BLOCKS(2), mutant ALLOWS(0) -> test-path requirement load-bearing"; else bad "T13 BG3 sentinel" "real=$bg_real(want 2) mut=$bg_mut(want 0)"; fi
+
+# (c) verify-release transition: build a release fixture that passes every check except (possibly)
+# bugfix-net, whose ledger we control. mk_rel <name> <ledger-content(%b)> -> project dir.
+mk_rel() {
+  _d=$(mkproj "$1"); fresh_mem "$_d"; mkdir -p "$_d/.claude/builder/bugfix"
+  printf '# c\n'   > "$_d/.claude/builder/CHANGELOG.md"
+  printf '# BUG\n' > "$_d/.claude/builder/BUG.md"
+  printf '%b' "$2" > "$_d/.claude/builder/bugfix/results.txt"
+  CLAUDE_PROJECT_DIR="$_d" LIB="$LIB" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+  printf '%s' "$_d"
+}
+# TR1: an always-green repro (green now, NEVER observed red) -> bugfix-net FAILS (no transition).
+TRAG=$(mk_rel t13_tr_alwaysgreen 'repro\tgreen\tpytest_x\nchar\tgreen\tpytest_y\n')
+rc=0; CLAUDE_PROJECT_DIR="$TRAG" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T13 TR1 always-green repro (no observed red) -> release BLOCKS exit 2" 2 "$rc"
+release_md_has "$TRAG" "already green before the fix" && ok "T13 TR1 RELEASE.md cites the missing red→green transition" || bad "T13 TR1 reason" "no transition reason in RELEASE.md"
+# TR2: a genuine RED→GREEN (historical red, current green) -> bugfix-net PASSES -> release READY.
+TRTR=$(mk_rel t13_tr_transition 'repro\tred\tpytest_x\nrepro\tgreen\tpytest_x\nchar\tgreen\tpytest_y\n')
+rc=0; CLAUDE_PROJECT_DIR="$TRTR" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T13 TR2 genuine red→green transition -> release exit 0 (no false-fail)" 0 "$rc"
+release_md_has "$TRTR" "RELEASE READY" && ok "T13 TR2 RELEASE.md reads RELEASE READY" || bad "T13 TR2 verdict" "not READY"
+
+# TR3 sentinel: drop the transition requirement (#BUGFIX_TRANSITION_RE: -gt 0 -> -gt 99) -> the
+# always-green fixture now PASSES -> the transition requirement is load-bearing.
+MVR="$WORK/mut_verify_rel"; mkdir -p "$MVR/scripts" "$MVR/lib"; cp "$LIB" "$MVR/lib/common.sh"
+sed '/#BUGFIX_TRANSITION_RE/ s/-gt 0/-gt 99/' "$VERIFY_RELEASE" > "$MVR/scripts/verify-release.sh"
+if ! cmp -s "$VERIFY_RELEASE" "$MVR/scripts/verify-release.sh"; then ok "T13 TR3 mutant differs (transition requirement neutered by sed)"; else bad "T13 TR3 mutant" "sed no-op — sentinel would be vacuous"; fi
+tr_real=0; CLAUDE_PROJECT_DIR="$TRAG" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE"                >/dev/null 2>&1 || tr_real=$?
+tr_mut=0;  CLAUDE_PROJECT_DIR="$TRAG" PIPELINE_ENFORCE=1 bash "$MVR/scripts/verify-release.sh" >/dev/null 2>&1 || tr_mut=$?
+if [ "$tr_real" = 2 ] && [ "$tr_mut" = 0 ]; then ok "T13 TR3 sentinel: real BLOCKS(2) always-green, mutant PASSES(0) -> transition requirement load-bearing"; else bad "T13 TR3 sentinel" "real=$tr_real(want 2) mut=$tr_mut(want 0)"; fi
+
+# (b) regression-gate persists the pre-fix red. mk_rg <name> -> project (BUG.md repro=true, auto mode,
+# a pre-seeded pre-fix red ledger). The repro command `true` is GREEN now; the pre-fix red is the
+# "recorded pre-edit run" the gate must KEEP (a non-empty PRIOR_REDS also keeps the git-stash probe
+# inert, so this is fully deterministic).
+mk_rg() {
+  _d=$(mkproj "$1"); mkdir -p "$_d/.claude/builder/bugfix"
+  printf '# BUG\n## Reproduction\n- Repro command: true\n' > "$_d/.claude/builder/BUG.md"
+  { printf '{\n'; printf '  "auto_run_tests": "auto"\n'; printf '}\n'; } > "$_d/.claude/builder/settings.json"
+  printf 'repro\tred\tpytest_x\n' > "$_d/.claude/builder/bugfix/results.txt"
+  printf '%s' "$_d"
+}
+RG1=$(mk_rg t13_rg_keep)
+CLAUDE_PROJECT_DIR="$RG1" bash "$REGRESSION_GATE" >/dev/null 2>&1 || true
+RL1="$RG1/.claude/builder/bugfix/results.txt"
+grep -Eq '^repro[[:space:]]+red'   "$RL1" && ok "T13 RG1 pre-fix RED preserved in the ledger (not truncated away)" || bad "T13 RG1 preserve" "no repro-red row: $(cat "$RL1" 2>/dev/null)"
+grep -Eq '^repro[[:space:]]+green' "$RL1" && ok "T13 RG1 post-fix GREEN recorded too -> the transition is on record" || bad "T13 RG1 green" "no repro-green row: $(cat "$RL1" 2>/dev/null)"
+
+# RG2 sentinel: delete the preserve line (#PREFIX_RED_KEEP) -> the gate truncates the pre-fix red
+# away again -> the preserve step is load-bearing.
+MRG="$WORK/mut_regr_gate"; mkdir -p "$MRG/scripts" "$MRG/lib"; cp "$LIB" "$MRG/lib/common.sh"
+sed '/#PREFIX_RED_KEEP/d' "$REGRESSION_GATE" > "$MRG/scripts/regression-gate.sh"
+if ! cmp -s "$REGRESSION_GATE" "$MRG/scripts/regression-gate.sh"; then ok "T13 RG2 mutant differs (preserve line deleted by sed)"; else bad "T13 RG2 mutant" "sed no-op — sentinel would be vacuous"; fi
+RG2=$(mk_rg t13_rg_trunc)
+CLAUDE_PROJECT_DIR="$RG2" bash "$MRG/scripts/regression-gate.sh" >/dev/null 2>&1 || true
+RL2="$RG2/.claude/builder/bugfix/results.txt"
+if grep -Eq '^repro[[:space:]]+red' "$RL2"; then bad "T13 RG2 sentinel" "mutant kept the red — preserve not load-bearing: $(cat "$RL2" 2>/dev/null)"; else ok "T13 RG2 sentinel: mutant TRUNCATED the pre-fix red -> the preserve step is load-bearing"; fi
+echo ""
+
+# ===========================================================================
+# TIER 14 — REGRESSION: a Bash command must not bypass the write guards (external review F-A). The
+# PreToolUse write guards only match Write|Edit|MultiEdit|NotebookEdit, so `sed -i` / `>` / `cp` /
+# `mv` / `tee` … via Bash mutated files straight past them. Fix: (a) the strictly read-only agents
+# no longer GRANT Bash; (b) explorer/ + builder/ wire a PreToolUse Bash matcher to guard-bash-write.sh
+# which BLOCKS (fail-closed) a mutation whose target isn't provably in the allow-zone/PLAN scope.
+# ===========================================================================
+tlog "tier14 start"; echo "-- tier 14: REGRESSION Bash bypasses write guards (F-A) --"
+# bashw_guard <proj> <command> [script] : run guard-bash-write on a Bash payload; print exit code.
+bashw_guard() {
+  _p=$1; _c=$2; _s=${3:-$GUARD_BASH_B}; _rc=0
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$_c" | CLAUDE_PROJECT_DIR="$_p" bash "$_s" >/dev/null 2>&1 || _rc=$?
+  printf '%s' "$_rc"
+}
+# builder context: PLAN scopes ONLY src/allowed.py.
+BWB=$(mkproj t14_bw_builder); mkdir -p "$BWB/.claude/builder"
+printf '# Plan\n## Scope\n- src/allowed.py\n' > "$BWB/.claude/builder/PLAN.md"
+assert_eq "T14 BW1 builder: Bash 'sed -i' to OUT-of-scope src/app.py BLOCKED exit 2" 2 "$(bashw_guard "$BWB" 'sed -i s/x/y/ src/app.py')"
+assert_eq "T14 BW2 builder: Bash 'sed -i' to IN-scope src/allowed.py allowed exit 0" 0 "$(bashw_guard "$BWB" 'sed -i s/x/y/ src/allowed.py')"
+assert_eq "T14 BW3 builder: read-only grep (no mutation) allowed exit 0"             0 "$(bashw_guard "$BWB" 'grep -R foo src/app.py')"
+assert_eq "T14 BW3b builder: redirect to /dev/null is a harmless sink, allowed exit 0" 0 "$(bashw_guard "$BWB" 'pytest -q > /dev/null 2>&1')"
+# explorer context: zone = .claude/explorer/.
+BWE=$(mkproj t14_bw_explorer); mkdir -p "$BWE/.claude/explorer"
+assert_eq "T14 BW4 explorer: Bash 'sed -i' OUT-of-zone src/app.py BLOCKED exit 2"    2 "$(bashw_guard "$BWE" 'sed -i s/x/y/ src/app.py' "$GUARD_BASH_E")"
+assert_eq "T14 BW5 explorer: redirect INTO .claude/explorer allowed exit 0"          0 "$(bashw_guard "$BWE" 'echo x > .claude/explorer/notes.md' "$GUARD_BASH_E")"
+assert_eq "T14 BW5b explorer: exfil .claude/explorer -> /tmp BLOCKED exit 2"         2 "$(bashw_guard "$BWE" 'cat .claude/explorer/m > /tmp/exfil' "$GUARD_BASH_E")"
+
+# (a) the strictly read-only agent frontmatters must NO LONGER grant Bash.
+nb=0
+for a in explorer/explorer-scout explorer/explorer-sage auditor/auditor-scout auditor/auditor-critical reviewer/reviewer-scout reviewer/reviewer-critical ops/ops-scout ops/ops-critical; do
+  if grep -E '^tools:' "$ROOT/plugins/${a%%/*}/agents/${a##*/}.md" 2>/dev/null | grep -qw Bash; then nb=$((nb+1)); fi
+done
+assert_eq "T14 read-only agent frontmatters no longer grant Bash (all 8)" 0 "$nb"
+
+# BW6 sentinel: delete the #BASHWRITE_BLOCK accumulation -> the guard never flags a target -> BW1's
+# out-of-scope sed now ALLOWS -> the in-zone check is load-bearing.
+MBW="$WORK/mut_bash_write"; mkdir -p "$MBW/scripts" "$MBW/lib"; cp "$LIB" "$MBW/lib/common.sh"
+sed '/#BASHWRITE_BLOCK/d' "$GUARD_BASH_B" > "$MBW/scripts/guard-bash-write.sh"
+if ! cmp -s "$GUARD_BASH_B" "$MBW/scripts/guard-bash-write.sh"; then ok "T14 BW6 mutant differs (#BASHWRITE_BLOCK accumulation deleted by sed)"; else bad "T14 BW6 mutant" "sed no-op — sentinel would be vacuous"; fi
+bw_real=$(bashw_guard "$BWB" 'sed -i s/x/y/ src/app.py')
+bw_mut=$(bashw_guard "$BWB" 'sed -i s/x/y/ src/app.py' "$MBW/scripts/guard-bash-write.sh")
+if [ "$bw_real" = 2 ] && [ "$bw_mut" = 0 ]; then ok "T14 BW6 sentinel: real BLOCKS(2), mutant ALLOWS(0) -> in-zone check load-bearing"; else bad "T14 BW6 sentinel" "real=$bw_real(want 2) mut=$bw_mut(want 0)"; fi
 echo ""
 
 # ===========================================================================

@@ -15,12 +15,13 @@
 #      gate exits 0, RELEASE.md reads "RELEASE READY", and ALL SEVEN checks show PASS (none SKIP).
 #      (To drive bugfix-net to PASS rather than SKIP — it is one of the seven — the green fixture
 #      also carries a BUG.md + a green repro ledger; without it that row would SKIP.)
-#   2. PER-MODULE NEGATIVES — eight pass/fail pairs. For each, build a fresh green fixture, prove it
+#   2. PER-MODULE NEGATIVES — nine pass/fail pairs. For each, build a fresh green fixture, prove it
 #      PASSES (exit 0) under enforce, then flip EXACTLY ONE thing and prove the gate BLOCKS (exit 2)
 #      and RELEASE.md cites the right reason: (a) stale memory, (b) builder not done, (c) a PLAN task
 #      missing its CHANGELOG coverage, (d) auditor high=1, (e) reviewer blocking=1, (f) ops
-#      blocking=1, (g) missing CHANGELOG, (h) bug repro red. This is the gate's integrated
-#      mutation-detection: one mutation each, each independently caught.
+#      blocking=1, (g) missing CHANGELOG, (h) bug repro red, (i) an always-green repro with no
+#      observed red→green transition (F-C). This is the gate's integrated mutation-detection: one
+#      mutation each, each independently caught.
 #   3. DASHBOARD — pipeline-status.sh on the green fixture: exit 0, never crashes (also on an EMPTY
 #      project), and natively rows ALL SIX modules — explorer/builder/auditor/reviewer/ops/pipeline.
 #      The auxiliary gates (auditor/reviewer/ops) are rowed directly with their state + headline
@@ -32,6 +33,9 @@
 #   5. BUILDER STOP-GATE (#6) — verify-build.sh no-PLAN handling is STATUS-aware: builder ran
 #      (STATUS state set) but PLAN.md absent -> the missing artifact is reported (blocks under
 #      enforce); no builder activity (no STATUS) -> a clean no-op (exit 0). Never crashes.
+#   6. FRESHNESS (F-B) — a prior green run must not certify stale/uncommitted code: a DIRTY working
+#      tree FAILS, a module STATUS recorded against a DIFFERENT tree FAILS, a matching+clean tree
+#      PASSES; verify-build.sh stamps the builder tree; sentinel proves the dirty check load-bearing.
 #
 # Keeps all five existing suites green (it adds a file; it never edits a script/lib). Summary line;
 # exits nonzero on any FAIL.
@@ -84,9 +88,11 @@ build_green() {
   printf '# Plan\n\n## Scope\n- a\n- b\n\n## Tasks\n### Task 1: do A\n### Task 2: do B\n' > "$d/.claude/builder/PLAN.md"
   printf '# Changelog\n\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n### Task 2 — edge-case coverage\n- nil -> handled at b:1\n' > "$d/.claude/builder/CHANGELOG.md"
   CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
-  # bug-fix net — BUG.md present + a GREEN repro ledger, so bugfix-net PASSES (not SKIPs).
+  # bug-fix net — BUG.md present + a repro ledger that records a real RED→GREEN TRANSITION (the
+  # pre-fix red kept by regression-gate.sh, then the post-fix green), so bugfix-net PASSES (F-C:
+  # terminal green ALONE no longer passes — an observed pre-fix red is required, not SKIPs).
   printf '# Bug Brief\nSymptom: x\nRepro status: GREEN\n' > "$d/.claude/builder/BUG.md"
-  printf 'repro green\nchar green\n' > "$d/.claude/builder/bugfix/results.txt"
+  printf 'repro red\nrepro green\nchar green\n' > "$d/.claude/builder/bugfix/results.txt"
   # auditor / reviewer / ops — all clean (0 high / 0 blocking / 0 blocking).
   CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write auditor  audit     done "" high=0 med=0 low=0'     >/dev/null 2>&1 || true
   CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=0 concern=0'   >/dev/null 2>&1 || true
@@ -102,6 +108,7 @@ flip_e() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write reviewer r
 flip_f() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write ops      readiness done "" blocking=1 concern=0' >/dev/null 2>&1 || true; }
 flip_g() { rm -f "$1/.claude/builder/CHANGELOG.md"; }                                                                                      # missing changelog
 flip_h() { printf 'repro red\nchar green\n' > "$1/.claude/builder/bugfix/results.txt"; }                                                   # repro not green
+flip_i() { printf 'repro green\nchar green\n' > "$1/.claude/builder/bugfix/results.txt"; }                                                 # always-green: no observed red -> no red->green transition (F-C)
 
 echo "== e2e (capstone) test ladder =="
 echo "ROOT=$ROOT"
@@ -146,7 +153,7 @@ echo ""
 # ===========================================================================
 # TIER 2 — PER-MODULE NEGATIVES: eight pass/fail pairs (one mutation each).
 # ===========================================================================
-echo "-- tier 2: PER-MODULE NEGATIVES (8 single-mutation pairs) --"
+echo "-- tier 2: PER-MODULE NEGATIVES (9 single-mutation pairs) --"
 NEG=0
 # pair <label> <flip-fn> <reason-regex> : green PASSES (exit 0), then the single flip BLOCKS (exit 2)
 # with the reason cited in RELEASE.md. All under PIPELINE_ENFORCE=1 so a REQUIRED failure -> exit 2.
@@ -169,6 +176,7 @@ pair "(e) reviewer blocking=1"          flip_e 'reviewer:.*BLOCKING'
 pair "(f) ops blocking=1"               flip_f 'ops:.*BLOCKING'
 pair "(g) missing CHANGELOG"            flip_g 'missing or empty'   # also trips coverage (CHANGELOG is its input); we assert the changelog reason
 pair "(h) bug repro red"                flip_h 'reproduction not green'
+pair "(i) repro always-green (F-C)"     flip_i 'already green before the fix'   # no observed red -> no red->green transition
 echo ""
 
 # ===========================================================================
@@ -246,6 +254,57 @@ B2="$WORK/vb_noactivity"; mkdir -p "$B2/.claude/builder"
 rc=0; CLAUDE_PROJECT_DIR="$B2" BUILDER_ENFORCE=1 bash "$VERIFY_BUILD" >/dev/null 2>"$WORK/vb2.err" || rc=$?
 assert_eq "T5 no builder activity (no STATUS) + no PLAN -> clean no-op (exit 0) under enforce" 0 "$rc"
 grep -q 'no .claude/builder/PLAN.md' "$WORK/vb2.err" && bad "T5 no-activity must not complain" "unexpected PLAN complaint: $(cat "$WORK/vb2.err" 2>/dev/null)" || ok "T5 no-activity no-op does NOT report a missing PLAN"
+echo ""
+
+# ===========================================================================
+# TIER 6 — FRESHNESS (external review F-B): a prior green run must NOT certify stale/uncommitted
+# code. The gate now (1) FAILS when the working tree is DIRTY (uncommitted source changes), and
+# (2) FAILS any REQUIRED module whose STATUS recorded a `tree=` digest different from the current
+# tree. .claude/ bookkeeping is excluded from the digest, so the gate's own state never reads dirty.
+# ===========================================================================
+echo "-- tier 6: FRESHNESS — stale-but-READY (F-B) --"
+# relsrc <dir> : a release-ready fixture WITH a committed source file, explorer re-pinned to the new HEAD.
+relsrc() {
+  build_green "$1"
+  printf 'print(1)\n' > "$1/app.py"
+  git -C "$1" add app.py >/dev/null 2>&1
+  git -C "$1" -c user.email=t@e -c user.name=t commit -qm app >/dev/null 2>&1 || true
+  nh=$(git -C "$1" rev-parse HEAD 2>/dev/null || printf x)
+  { printf 'explored_commit: %s\n' "$nh"; printf 'coverage: 90%%\n'; } > "$1/.claude/explorer/MEMORY.md"
+}
+# (a) matching tree + clean working tree -> RELEASE READY.
+TF="$WORK/fb_match"; relsrc "$TF"
+TDIG=$(CLAUDE_PROJECT_DIR="$TF" bash -c '. "$LIB"; bd_tree_digest')
+CLAUDE_PROJECT_DIR="$TF" bash -c '. "$LIB"; bd_status_write builder qa done "" tree="'"$TDIG"'"' >/dev/null 2>&1 || true
+rc=0; CLAUDE_PROJECT_DIR="$TF" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T6 matching tree + clean -> release exit 0" 0 "$rc"
+rel_has "$TF" 'RELEASE READY' && ok "T6 RELEASE.md reads RELEASE READY (fresh)" || bad "T6 match verdict" "not READY"
+# (b) an UNCOMMITTED source edit -> dirty tree -> BLOCKS.
+printf 'print(2)\n' >> "$TF/app.py"
+rc=0; CLAUDE_PROJECT_DIR="$TF" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T6 uncommitted source edit -> release BLOCKS exit 2 (stale)" 2 "$rc"
+rel_has "$TF" 'DIRTY|different working tree' && ok "T6 RELEASE.md cites the dirty/stale tree" || bad "T6 dirty reason" "missing"
+# (c) builder STATUS recorded against a DIFFERENT tree, but the working tree is CLEAN -> per-module stale FAIL.
+TC="$WORK/fb_stale"; relsrc "$TC"
+CLAUDE_PROJECT_DIR="$TC" bash -c '. "$LIB"; bd_status_write builder qa done "" tree="deadbeef:stalebody"' >/dev/null 2>&1 || true
+rc=0; CLAUDE_PROJECT_DIR="$TC" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T6 builder tree mismatch (clean tree) -> release BLOCKS exit 2" 2 "$rc"
+rel_has "$TC" 'different working tree' && ok "T6 RELEASE.md cites the builder tree mismatch" || bad "T6 stale-tree reason" "missing"
+# (d) verify-build.sh STAMPS the builder tree on a passing build (the real-flow writer).
+VB="$WORK/fb_vbstamp"; relsrc "$VB"
+printf '# Plan\n## Scope\n- app.py\n' > "$VB/.claude/builder/PLAN.md"
+CLAUDE_PROJECT_DIR="$VB" bash -c '. "$LIB"; bd_status_write builder qa done 90' >/dev/null 2>&1 || true   # no tree= yet
+CLAUDE_PROJECT_DIR="$VB" bash "$VERIFY_BUILD" >/dev/null 2>&1 || true
+vbtree=$(CLAUDE_PROJECT_DIR="$VB" bash -c '. "$LIB"; bd_status_read builder tree' 2>/dev/null || true)
+[ -n "$vbtree" ] && ok "T6 verify-build stamps builder tree= on a passing build" || bad "T6 vb stamp" "builder tree empty after verify-build"
+# (e) sentinel: neuter the dirty check (#F_B_DIRTY) -> a dirty fixture (builder has no tree=) PASSES.
+SF="$WORK/fb_sentinel"; relsrc "$SF"; printf 'print(3)\n' >> "$SF/app.py"   # uncommitted -> dirty
+MUTF="$WORK/mut_fresh"; mkdir -p "$MUTF/scripts" "$MUTF/lib"; cp "$LIB" "$MUTF/lib/common.sh"
+sed '/#F_B_DIRTY/ s/-n "\$TREE_DIRTY"/-z "$TREE_DIRTY"/' "$VERIFY_RELEASE" > "$MUTF/scripts/verify-release.sh"
+if ! cmp -s "$VERIFY_RELEASE" "$MUTF/scripts/verify-release.sh"; then ok "T6 sentinel mutant differs (#F_B_DIRTY neutered by sed)"; else bad "T6 sentinel mutant" "sed no-op — sentinel would be vacuous"; fi
+fb_real=0; CLAUDE_PROJECT_DIR="$SF" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || fb_real=$?
+fb_mut=0;  CLAUDE_PROJECT_DIR="$SF" PIPELINE_ENFORCE=1 bash "$MUTF/scripts/verify-release.sh" >/dev/null 2>&1 || fb_mut=$?
+if [ "$fb_real" = 2 ] && [ "$fb_mut" = 0 ]; then ok "T6 sentinel: real BLOCKS(2) on dirty tree, mutant PASSES(0) -> dirty check load-bearing"; else bad "T6 sentinel" "real=$fb_real(want 2) mut=$fb_mut(want 0)"; fi
 echo ""
 
 echo "== e2e ladder summary: $PASS passed, $FAIL failed =="

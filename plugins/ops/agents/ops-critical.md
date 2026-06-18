@@ -4,7 +4,7 @@ description: Depth-first critical deploy-readiness reviewer. Use to reason hard 
 model: opus
 effort: high
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: assess-readiness, deploy-checklist
 ---
 
