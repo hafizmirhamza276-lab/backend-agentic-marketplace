@@ -59,6 +59,14 @@
       "version": "0.1.0",
       "category": "release-ops",
       "author": { "name": "hafizmirhamza276-lab" }
+    },
+    {
+      "name": "minimalist",
+      "source": "./plugins/minimalist",
+      "description": "Always-on \"write the least code that fully works\" discipline. A SessionStart hook injects the full decision LADDER (skills/minimal-code) and a UserPromptSubmit hook re-injects a compact reminder every turn, so the agent ships the SMALLEST code that satisfies the requirement WITHOUT cutting validation, error handling, security, or accessibility. Both hooks are node-guarded and fail-quiet (node is OPTIONAL — absent means the hooks stay silent and the skill still works on demand) and INJECT CONTEXT ONLY (no gate decision; every gate in this marketplace stays pure shell/awk). Intensity off|lite|full|ultra via /minimize, mirrored into STATUS.json. YAGNI applies only to UNREQUESTED scope — anything the builder PLAN or the user mandates stays in-scope. Ladder adapted from Ponytail by Dietrich Gebert (MIT).",
+      "version": "0.1.0",
+      "category": "code-quality",
+      "author": { "name": "hafizmirhamza276-lab" }
     }
   ]
 }
