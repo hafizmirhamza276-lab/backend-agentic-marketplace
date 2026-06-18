@@ -4,7 +4,7 @@ description: Breadth-first audit scout. Use to sweep a change (or the repo) for 
 model: sonnet
 effort: medium
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: audit-codebase, classify-findings
 ---
 

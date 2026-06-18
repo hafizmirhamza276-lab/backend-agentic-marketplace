@@ -4,7 +4,7 @@ description: Depth-first critical change reviewer. Use to reason hard about the 
 model: opus
 effort: high
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: review-change, check-invariants
 ---
 

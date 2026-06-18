@@ -112,6 +112,18 @@ PY
 fi
 
 if [ "$problems" -eq 0 ]; then
+  # Stamp the WORKING TREE this build was verified against (external review F-B) so the release gate
+  # can FAIL a later stale-but-green release. Re-write STATUS preserving its existing fields and only
+  # ADD tree=; do it only when the builder STATUS already exists (the agents set it), so this never
+  # fabricates a STATUS for a build that did not run.
+  _bstate="$(bd_status_read builder state 2>/dev/null || true)"
+  if [ -n "$_bstate" ]; then
+    bd_status_write builder \
+      "$(bd_status_read builder phase 2>/dev/null || true)" \
+      "$_bstate" \
+      "$(bd_status_read builder coverage 2>/dev/null || true)" \
+      tree="$(bd_tree_digest)" >/dev/null 2>&1 || true
+  fi
   bd_say "build verification passed."
   exit 0
 fi

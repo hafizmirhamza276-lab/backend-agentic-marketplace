@@ -44,6 +44,25 @@ if bd_have git && git -C "$PROJECT" rev-parse HEAD >/dev/null 2>&1; then
   HEAD_FULL="$(git -C "$PROJECT" rev-parse HEAD 2>/dev/null || printf '')"
 fi
 
+# Working-tree freshness (external review F-B): a prior green run must NOT certify stale/uncommitted
+# code. TREE_NOW digests the current SOURCE tree (HEAD + uncommitted source changes, EXCLUDING the
+# gate's own .claude/ bookkeeping); each module's STATUS records the tree it examined. TREE_DIRTY is
+# non-empty when there are uncommitted SOURCE changes right now.
+TREE_NOW="$(bd_tree_digest)"
+TREE_DIRTY=""
+if bd_have git && git -C "$PROJECT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  TREE_DIRTY="$(git -C "$PROJECT" status --porcelain -- . ':(exclude).claude' 2>/dev/null || true)"
+fi
+# tree_stale <module> : succeeds (module IS stale) when it recorded a `tree=` that DIFFERS from the
+# current tree. A module that recorded no tree -> no opinion (returns non-zero = not stale), so the
+# check is purely additive: modules that don't stamp a tree behave exactly as before.
+tree_stale() {
+  local rec; rec="$(bd_status_read "$1" tree 2>/dev/null || true)"
+  [ -n "$rec" ] || return 1
+  [ "$rec" = "$TREE_NOW" ] && return 1
+  return 0
+}
+
 # --- result accumulation -----------------------------------------------------
 declare -a ROWS=()
 REQ_FAIL=0
@@ -106,7 +125,12 @@ else
     record "explorer-memory" FAIL 1 "explorer memory: cannot verify freshness (git HEAD unavailable)"
   else
     case "$HEAD_FULL" in
-      "$EXPLORED"*) record "explorer-memory" PASS 1 "fresh: explored_commit matches HEAD" ;;
+      "$EXPLORED"*)
+        if [ -n "$TREE_DIRTY" ]; then   #F_B_DIRTY working tree must be clean to release
+          record "explorer-memory" FAIL 1 "working tree DIRTY — uncommitted source changes are NOT covered by the modules' green runs; commit or revert before release (a prior green run must not certify new/uncommitted code)"
+        else
+          record "explorer-memory" PASS 1 "fresh: explored_commit matches HEAD; working tree clean"
+        fi ;;
       *)            record "explorer-memory" FAIL 1 "explorer memory: STALE (explored=$EXPLORED, HEAD=$HEAD_FULL) — re-run /explorer:start" ;;
     esac
   fi
@@ -118,6 +142,8 @@ fi
 BSTATE="$(bd_status_read builder state 2>/dev/null || true)"
 if [ "$BSTATE" != "done" ]; then
   record "builder-finished" FAIL 1 "builder: NOT done (STATUS state='${BSTATE:-<none>}')"
+elif tree_stale builder; then   #F_B_TREE builder STATUS recorded against a different tree
+  record "builder-finished" FAIL 1 "builder: STATUS recorded against a DIFFERENT working tree than now (stale green) — re-run the build before release"
 else
   PLAN="$(bd_plan)"
   if [ -f "$PLAN" ]; then
@@ -143,27 +169,41 @@ else
   if [ ! -f "$LEDGER" ]; then
     record "bugfix-net" FAIL 1 "bugfix: results ledger MISSING (.claude/builder/bugfix/results.txt)"
   else
+    # Transition-aware bug-fix net (external review F-C): terminal GREEN alone is NOT enough — a
+    # no-op / always-green "repro" would otherwise sail through, having NEVER proven it can catch
+    # the bug. Require a real RED→GREEN TRANSITION per repro id (the command — the BUG.md schema
+    # declares one 'Repro command', so each id is one repro): the repro must have been observed RED
+    # at some point (historical, kept in the ledger by regression-gate.sh) AND be GREEN now (its
+    # LATEST recorded status). char/linked must not be red. Pure awk over the whitespace-separated
+    # ledger ($1=kind, $2=status, $3..=command id). Counts: repro-ids, repro-not-green-now,
+    # repro-green-now-but-never-red, char/linked-red.
     COUNTS="$(awk '
       function norm(s){ s=tolower(s);
         if (s ~ /^(green|pass|passed|passing|ok|0|true)$/)  return "green";
         if (s ~ /^(red|fail|failed|failing|error|1|false)$/) return "red";
         return "unknown" }
       { k=$1; st=norm($2);
-        if (k=="repro")               { rt++; if (st=="green") rg++ }
-        else if (k=="char"||k=="linked"){ ct++; if (st=="red")  cr++ } }
-      END{ printf "%d %d %d %d", rt+0, rg+0, ct+0, cr+0 }
+        id=""; for(i=3;i<=NF;i++) id=id (i>3?" ":"") $i
+        if (k=="repro")                  { rseen[id]=1; rlatest[id]=st; if (st=="red") rred[id]=1 }
+        else if (k=="char"||k=="linked") { if (st=="red") cr++ } }
+      END{ for (x in rseen) { rt++;
+             if (rlatest[x]!="green")  rng++;          # still red now
+             else if (!(x in rred))   rnr++ }          # green now but never observed red (no transition)
+           printf "%d %d %d %d", rt+0, rng+0, rnr+0, cr+0 }
     ' "$LEDGER" 2>/dev/null)"
     # shellcheck disable=SC2086
     set -- $COUNTS
-    RT="${1:-0}"; RG="${2:-0}"; CT="${3:-0}"; CR="${4:-0}"
+    RT="${1:-0}"; RNG="${2:-0}"; RNR="${3:-0}"; CR="${4:-0}"
     if [ "$RT" -eq 0 ]; then
       record "bugfix-net" FAIL 1 "bugfix: no reproduction result recorded — repro is the cornerstone of the fix"
-    elif [ "$RG" -lt "$RT" ]; then
+    elif [ "$RNG" -gt 0 ]; then
       record "bugfix-net" FAIL 1 "bugfix: reproduction not green (red->green not proven)"
+    elif [ "$RNR" -gt 0 ]; then   #BUGFIX_TRANSITION_RE require an observed RED before the GREEN
+      record "bugfix-net" FAIL 1 "bugfix: no red->green transition observed — the repro was already green before the fix (an always-green repro does not prove the bug was fixed)"
     elif [ "$CR" -gt 0 ]; then
       record "bugfix-net" FAIL 1 "bugfix: characterization/linked test regressed ($CR red)"
     else
-      record "bugfix-net" PASS 1 "bugfix: repro green; characterization/linked green ($CT pinned)"
+      record "bugfix-net" PASS 1 "bugfix: repro red->green transition observed; characterization/linked green"
     fi
   fi
 fi
@@ -181,6 +221,8 @@ else
     record "auditor" FAIL 1 "auditor: $AHIGH HIGH finding(s) — must be 0 to release"
   elif [ "$ASTATE" = "failed" ] || [ "$ASTATE" = "blocked" ]; then
     record "auditor" FAIL 1 "auditor: STATUS state='$ASTATE'"
+  elif tree_stale auditor; then
+    record "auditor" FAIL 1 "auditor: STATUS recorded against a DIFFERENT working tree than now (stale green) — re-run the audit before release"
   else
     record "auditor" PASS 1 "auditor: state='${ASTATE:-?}', 0 high"
   fi
@@ -212,6 +254,8 @@ else
     record "reviewer" FAIL 1 "reviewer: $RBLOCK BLOCKING finding(s) — must be 0 to release"
   elif [ "$RSTATE" = "failed" ] || [ "$RSTATE" = "blocked" ]; then
     record "reviewer" FAIL 1 "reviewer: STATUS state='$RSTATE'"
+  elif tree_stale reviewer; then
+    record "reviewer" FAIL 1 "reviewer: STATUS recorded against a DIFFERENT working tree than now (stale green) — re-run the review before release"
   else
     record "reviewer" PASS 1 "reviewer: state='${RSTATE:-?}', 0 blocking"
   fi
@@ -233,6 +277,8 @@ else
     record "ops" FAIL 1 "ops: $OBLOCK BLOCKING finding(s) — must be 0 to release"
   elif [ "$OSTATE" = "failed" ] || [ "$OSTATE" = "blocked" ]; then
     record "ops" FAIL 1 "ops: STATUS state='$OSTATE'"
+  elif tree_stale ops; then
+    record "ops" FAIL 1 "ops: STATUS recorded against a DIFFERENT working tree than now (stale green) — re-run the readiness check before release"
   else
     record "ops" PASS 1 "ops: state='${OSTATE:-?}', 0 blocking"
   fi

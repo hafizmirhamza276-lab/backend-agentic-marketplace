@@ -4,7 +4,7 @@ description: Breadth-first change-review scout. Use to enumerate the changed fil
 model: sonnet
 effort: medium
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: review-change, check-invariants
 ---
 

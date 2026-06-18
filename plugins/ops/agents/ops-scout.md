@@ -4,7 +4,7 @@ description: Breadth-first deploy/release-readiness scout. Use to inventory the 
 model: sonnet
 effort: medium
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: assess-readiness, deploy-checklist
 ---
 

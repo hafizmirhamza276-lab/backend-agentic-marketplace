@@ -4,7 +4,7 @@ description: Depth-first codebase analyst. Use to explain WHY the code is built 
 model: opus
 effort: high
 maxTurns: 40
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 skills: explore-codebase
 ---
 

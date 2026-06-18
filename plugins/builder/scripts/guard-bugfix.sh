@@ -41,27 +41,10 @@ BUGMD="$(bd_bug)"
 # Reproduce-first is opt-out: honor require_reproduction (default true).
 [ "$(bd_setting require_reproduction true)" = "true" ] || exit 0
 
-# --- already captured? then reproduce-first is satisfied; let edits through -------
-# (a) explicit reporter confirmation of a constructed repro (orchestrator writes this
-#     only after the user confirmed proceeding), or
-# (b) the declared repro TEST file actually exists on disk (you wrote the failing test).
-if [ -f "$(bd_bugfix_dir)/repro.confirmed" ]; then exit 0; fi
-
-REPRO_DECL="$(grep -iE '^[[:space:]]*-?[[:space:]]*Repro test[[:space:]]*:' "$BUGMD" 2>/dev/null \
-  | head -n1 \
-  | sed -E 's/.*[Rr]epro test[[:space:]]*:[[:space:]]*//; s/`//g; s/::.*$//; s/[[:space:]].*$//' || true)"
-if [ -n "$REPRO_DECL" ]; then
-  case "$REPRO_DECL" in /*) repro_abs="$REPRO_DECL" ;; *) repro_abs="$PROJECT/$REPRO_DECL" ;; esac
-  [ -e "$repro_abs" ] && exit 0          # the repro test exists → captured
-fi
-
-# --- not captured: allow building the net (tests), block touching source ---------
-# Always allow the file the Brief names as the repro test (it may live anywhere).
-[ -n "$REPRO_DECL" ] && [ "$REL" = "$REPRO_DECL" ] && exit 0
-
-# Recognize test files across ecosystems (so the failing repro + characterization
-# tests can be written before any source edit). Precise patterns — avoid matching
-# e.g. `latest.py` as a test.
+# Recognize test files across ecosystems (so the failing repro + characterization tests can be
+# written before any source edit). Precise patterns — avoid matching e.g. `latest.py` as a test.
+# Defined BEFORE the capture checks because (external review F-C) a declared repro now counts as
+# "captured" ONLY when it is a recognized TEST path — not merely any existing file on disk.
 is_test_path() {
   local p="$1" bn lb lp
   bn="$(basename "$p")"
@@ -83,6 +66,28 @@ is_test_path() {
   esac
   return 1
 }
+
+# --- already captured? then reproduce-first is satisfied; let edits through -------
+# (a) explicit reporter confirmation of a constructed repro (orchestrator writes this
+#     only after the user confirmed proceeding), or
+# (b) the declared repro is a recognized TEST path that exists on disk (you wrote the failing
+#     test). (external review F-C) The old check accepted ANY existing file as the repro, so
+#     declaring a non-test file (README.md, a source file) "captured" reproduce-first with no
+#     real repro — and a no-op/always-green repro then sailed through the whole bug-fix net.
+if [ -f "$(bd_bugfix_dir)/repro.confirmed" ]; then exit 0; fi
+
+REPRO_DECL="$(grep -iE '^[[:space:]]*-?[[:space:]]*Repro test[[:space:]]*:' "$BUGMD" 2>/dev/null \
+  | head -n1 \
+  | sed -E 's/.*[Rr]epro test[[:space:]]*:[[:space:]]*//; s/`//g; s/::.*$//; s/[[:space:]].*$//' || true)"
+if [ -n "$REPRO_DECL" ]; then
+  case "$REPRO_DECL" in /*) repro_abs="$REPRO_DECL" ;; *) repro_abs="$PROJECT/$REPRO_DECL" ;; esac
+  if is_test_path "$REPRO_DECL" && [ -e "$repro_abs" ]; then exit 0; fi   #BUGFIX_REPRO_TESTPATH the repro must be a recognized TEST path, not any file
+fi
+
+# --- not captured: allow building the net (tests), block touching source ---------
+# Always allow the file the Brief names as the repro test (it may live anywhere).
+[ -n "$REPRO_DECL" ] && [ "$REL" = "$REPRO_DECL" ] && exit 0
+
 is_test_path "$REL" && exit 0
 
 bd_block "BLOCKED (reproduce-first): bug-fix mode is engaged (.claude/builder/BUG.md) and no failing reproduction has been captured yet, so source edits are not allowed ($REL). Write a DETERMINISTIC failing repro test that asserts the expected behavior FIRST (it must fail on the current code), then fix. If the symptom genuinely can't be reproduced, surface the missing info to the reporter or get explicit confirmation of a constructed repro (then the orchestrator writes .claude/builder/bugfix/repro.confirmed). Not fixing a bug? Remove .claude/builder/BUG.md. (Set require_reproduction=false to disable this guard.)"
