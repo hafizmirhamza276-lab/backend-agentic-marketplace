@@ -91,8 +91,10 @@ build_green() {
   # bug-fix net — BUG.md present + a repro ledger that records a real RED→GREEN TRANSITION (the
   # pre-fix red kept by regression-gate.sh, then the post-fix green), so bugfix-net PASSES (F-C:
   # terminal green ALONE no longer passes — an observed pre-fix red is required, not SKIPs).
+  # Ledger rows use the 3-field TAB format regression-gate.sh actually emits (kind<TAB>status<TAB>
+  # command-id); both repro rows share one command id so the transition resolves per-id.
   printf '# Bug Brief\nSymptom: x\nRepro status: GREEN\n' > "$d/.claude/builder/BUG.md"
-  printf 'repro red\nrepro green\nchar green\n' > "$d/.claude/builder/bugfix/results.txt"
+  printf 'repro\tred\tpytest_x\nrepro\tgreen\tpytest_x\nchar\tgreen\tpytest_y\n' > "$d/.claude/builder/bugfix/results.txt"
   # auditor / reviewer / ops — all clean (0 high / 0 blocking / 0 blocking).
   CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write auditor  audit     done "" high=0 med=0 low=0'     >/dev/null 2>&1 || true
   CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=0 concern=0'   >/dev/null 2>&1 || true
@@ -107,8 +109,8 @@ flip_d() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write auditor  a
 flip_e() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=1 concern=0' >/dev/null 2>&1 || true; }
 flip_f() { CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write ops      readiness done "" blocking=1 concern=0' >/dev/null 2>&1 || true; }
 flip_g() { rm -f "$1/.claude/builder/CHANGELOG.md"; }                                                                                      # missing changelog
-flip_h() { printf 'repro red\nchar green\n' > "$1/.claude/builder/bugfix/results.txt"; }                                                   # repro not green
-flip_i() { printf 'repro green\nchar green\n' > "$1/.claude/builder/bugfix/results.txt"; }                                                 # always-green: no observed red -> no red->green transition (F-C)
+flip_h() { printf 'repro\tred\tpytest_x\nchar\tgreen\tpytest_y\n' > "$1/.claude/builder/bugfix/results.txt"; }                              # repro not green
+flip_i() { printf 'repro\tgreen\tpytest_x\nchar\tgreen\tpytest_y\n' > "$1/.claude/builder/bugfix/results.txt"; }                           # always-green: no observed red -> no red->green transition (F-C)
 
 echo "== e2e (capstone) test ladder =="
 echo "ROOT=$ROOT"
