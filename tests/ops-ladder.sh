@@ -266,6 +266,84 @@ else
 fi
 echo ""
 
+# ===========================================================================
+# TIER 8 — REGRESSION: ops_o2 must be robust to JSON RE-FORMATTING (external review). Key order /
+# whitespace is insignificant, so a reformatter (prettier / jq / `python -m json.tool`) can split a
+# plugin's nested `"author": { "name": … }` onto its own indented line; a naive line-start "name"
+# anchor then reads the AUTHOR name as a plugin and — when the author block precedes "version" — LOSES
+# the real version (flushed empty, mis-attributed to the author). The fix tracks object-nesting depth
+# and captures plugin fields only at nest==0. All cases use ZERO python (pure awk).
+#   TF1 (the fix) pretty fixture, author BLOCK before version, real version MISMATCH -> O2 still
+#       detects the REAL plugin's mismatch (names 'foo', keeps 0.1.0 vs 0.2.0), never the author name.
+#       (Before the fix foo's version was lost -> NO concern.)
+#   TF2 (control) the current single-line-author layout, versions match -> O2 silent (no regression).
+#   TF3 a real mismatch is detected under BOTH the single-line AND the pretty author-before-version layout.
+#   TF4 (sentinel) neuter the nested-object skip (drop the #NEST_SKIP nest++) -> the pretty fixture
+#       mis-parses, foo's version is lost, and the CONCERN vanishes -> the nesting skip is load-bearing.
+# ===========================================================================
+echo "-- tier 8: REGRESSION ops_o2 reformat-robust (nested author skip) --"
+# mk_manifest_pretty <root> <entry-version> <plugin.json-version> : like mk_manifest but PRETTY-PRINTED
+# with the nested author object SPLIT across indented lines and placed BEFORE "version" (the layout a
+# reformatter can produce). A literal {brace} in the description proves brace-in-string safety. The
+# top-level marketplace "version" (9.9.9) again differs, proving it is never mistaken for an entry.
+mk_manifest_pretty() {
+  mkdir -p "$1/.claude-plugin" "$1/plugins/foo/.claude-plugin"
+  {
+    printf '{\n  "name": "fix",\n  "version": "9.9.9",\n  "plugins": [\n'
+    printf '    {\n'
+    printf '      "name": "foo",\n'
+    printf '      "source": "./plugins/foo",\n'
+    printf '      "description": "desc with a literal {brace} in prose",\n'
+    printf '      "author": {\n'
+    printf '        "name": "ACME-Author",\n'
+    printf '        "url": "https://example.test"\n'
+    printf '      },\n'
+    printf '      "version": "%s",\n' "$2"
+    printf '      "category": "x"\n'
+    printf '    }\n'
+    printf '  ]\n}\n'
+  } > "$1/.claude-plugin/marketplace.json"
+  printf '{\n  "name": "foo",\n  "version": "%s"\n}\n' "$3" > "$1/plugins/foo/.claude-plugin/plugin.json"
+}
+
+# TF1 — pretty author-before-version + real mismatch -> O2 detects the REAL plugin, never the author.
+F="$WORK/tf1"; mk_manifest_pretty "$F" 0.1.0 0.2.0
+out=$(run_check ops_o2 "$F")
+has "$out" CONCERN o2-version-consistency && ok "TF1 pretty author-before-version: O2 still DETECTS the real mismatch" || bad "TF1 detect" "no CONCERN; got: [$out]"
+printf '%s\n' "$out" | grep -q "for plugin 'foo'" && ok "TF1 CONCERN names the REAL plugin 'foo' (not the author)" || bad "TF1 names foo" "got: [$out]"
+printf '%s\n' "$out" | grep -q "version '0.1.0' != plugin.json version '0.2.0'" && ok "TF1 real version pair (0.1.0 vs 0.2.0) preserved, not lost" || bad "TF1 version pair" "got: [$out]"
+if printf '%s\n' "$out" | grep -q "ACME-Author"; then bad "TF1 author leak" "author name surfaced as a plugin: [$out]"; else ok "TF1 author name 'ACME-Author' is NEVER treated as a plugin"; fi
+
+# TF2 — control: current single-line-author layout, versions match -> O2 silent (exactly as before).
+F="$WORK/tf2"; mk_manifest "$F" 0.1.0 0.1.0
+out=$(run_check ops_o2 "$F"); n=$(cnt "$out" CONCERN o2-version-consistency)
+assert_eq "TF2 control single-line author + matching versions -> O2 silent (no regression)" 0 "$n"
+
+# TF3 — a real mismatch is detected under BOTH layouts.
+F="$WORK/tf3a"; mk_manifest "$F" 1.0.0 2.0.0
+outA=$(run_check ops_o2 "$F")
+has "$outA" CONCERN o2-version-consistency && ok "TF3 mismatch detected under single-line author layout" || bad "TF3 single-line" "got: [$outA]"
+F="$WORK/tf3b"; mk_manifest_pretty "$F" 1.0.0 2.0.0
+outB=$(run_check ops_o2 "$F")
+has "$outB" CONCERN o2-version-consistency && ok "TF3 mismatch detected under pretty author-before-version layout" || bad "TF3 pretty" "got: [$outB]"
+
+# TF4 MUTATION SENTINEL — neuter the nested-object skip (drop `nest++` on the #NEST_SKIP line) so the
+# author block no longer raises depth. The pretty fixture then mis-parses: the author "name" is read
+# as a plugin, foo is flushed with an EMPTY version, and foo's source collapses into the version slot
+# (tab is IFS-whitespace) -> the gate reports a GARBAGE version, NOT the real 0.1.0-vs-0.2.0 pair. The
+# REAL parser still reads the correct pair, so the nesting skip is load-bearing (not vacuous).
+MUTN="$WORK/mut-nest-checks.sh"
+sed '/#NEST_SKIP/ s/nest++; //' "$CHECKS" > "$MUTN"
+if ! cmp -s "$CHECKS" "$MUTN"; then ok "TF4 mutant differs from real checks (nest++ removed by sed)"; else bad "TF4 mutant" "sed no-op — sentinel would be vacuous"; fi
+F="$WORK/tf4"; mk_manifest_pretty "$F" 0.1.0 0.2.0
+real_o2=$(run_check ops_o2 "$F")
+mut_o2=$(OPS_ROOT="$F" MUT="$MUTN" bash -c '. "$LIB"; . "$MUT"; ops_o2' 2>/dev/null || true)
+CORRECT="version '0.1.0' != plugin.json version '0.2.0'"
+real_ok=no; printf '%s\n' "$real_o2" | grep -qF "$CORRECT" && real_ok=yes
+mut_ok=no;  printf '%s\n' "$mut_o2"  | grep -qF "$CORRECT" && mut_ok=yes
+if [ "$real_ok" = yes ] && [ "$mut_ok" = no ]; then ok "TF4 sentinel: real reads the correct version pair, nest-neutered mutant mis-parses it -> nested-skip load-bearing"; else bad "TF4 sentinel" "real_ok=$real_ok mut_ok=$mut_ok | real=[$real_o2] mut=[$mut_o2]"; fi
+echo ""
+
 echo "== ops ladder summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
