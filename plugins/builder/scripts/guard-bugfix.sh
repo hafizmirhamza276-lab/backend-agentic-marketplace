@@ -14,7 +14,9 @@
 # Fail direction: this guard only ever ACTS inside an engaged bug-fix session; when it
 # can't be sure (no BUG.md), it exits 0 and stays out of the way. Within a bug-fix
 # session the safe failure is to BLOCK (force a repro), which is what it does.
-set -euo pipefail
+# NOT errexit (F-A4): under `set -e` a PreToolUse guard that hits an unexpected non-zero aborts with
+# THAT code — and PreToolUse blocks only on exit 2, so the edit would proceed unguarded (fail-open).
+set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$DIR/../lib/common.sh"

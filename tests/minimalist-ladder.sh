@@ -201,6 +201,21 @@ if [ "${mut_d6:-0}" -ge 1 ] && [ "${real_d6:-0}" = 0 ]; then
 else
   bad "T3 D6 placement sentinel" "mut=$mut_d6 (want >=1) real=$real_d6 (want 0)"
 fi
+# F-B4: the node hook .js files must SHIP LF (i/lf) and be tracked executable (100755). A CRLF re-save
+# would silently break #!/usr/bin/env node on POSIX; .gitattributes pins '*.js eol=lf' and D9 enforces both.
+if command -v git >/dev/null 2>&1; then
+  for jf in "$ACTIVATE" "$TURN"; do
+    rel="${jf#"$ROOT"/}"; bn=$(basename "$jf")
+    eol=$(git -C "$ROOT" ls-files --eol -- "$rel" 2>/dev/null | awk '{print $1}')
+    mode=$(git -C "$ROOT" ls-files -s -- "$rel" 2>/dev/null | awk '{print $1}')
+    [ "$eol" = "i/lf" ]    && ok "T3 $bn ships LF (i/lf)"                || bad "T3 $bn eol"  "got [$eol] (want i/lf)"
+    [ "$mode" = "100755" ] && ok "T3 $bn tracked executable (100755)"   || bad "T3 $bn mode" "got [$mode] (want 100755)"
+  done
+  # .gitattributes pins *.js to eol=lf (F-B4).
+  grep -Eq '^\*\.js[[:space:]].*eol=lf' "$ROOT/.gitattributes" && ok "T3 .gitattributes pins *.js eol=lf (F-B4)" || bad "T3 gitattributes js" "no '*.js ... eol=lf' rule"
+else
+  skipnote "T3 .js LF/755 (git unavailable)"
+fi
 echo ""
 
 # ===========================================================================

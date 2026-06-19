@@ -98,34 +98,60 @@ except Exception:
     print(default)
 PY
   else
-    # Pure-shell fallback — NESTING-AWARE (external review F-D). The OLD fallback was an UNANCHORED
-    # grep|head -n1, so a nested key SHADOWED the real top-level one (e.g.
-    # {"profiles":{"enforce_release":false}, "enforce_release":true} read `false`) — a FAIL-OPEN for
-    # enforce_*/require_reproduction on a python-less host (the gate silently stopped enforcing). We
-    # canNOT line-start-anchor like bd_status_read does: settings.json is USER-controlled, so keys may
-    # be indented arbitrarily and reordered. Instead, mirror ops_o2 — track STRUCTURAL object/array
-    # depth: the root object's `{` opens depth 1, so a genuine TOP-LEVEL key sits at depth==1; a key
-    # nested inside any object/array is at depth>1 and is IGNORED. Depth is detected STRUCTURALLY — a
-    # line whose value ends in `{`/`[` opens a level, a lone `}`/`]` (optional trailing comma) closes
-    # one — NEVER by counting raw braces, so a brace inside a quoted value can't skew it. The key is
-    # compared as a STRING (not a regex), so the match is whitespace/key-order/value-format agnostic and
-    # injection-proof. Assumes one-key-per-line pretty JSON (what python json.dump(indent=2)/jq/prettier
-    # and this tool all emit); a fully compact single-line document is out of scope (the same documented
-    # limit as ops_o2) and simply yields the default — the advisory / fail-SAFE direction.
-    local v
-    v=$(awk -v want="$key" '
+    # Pure-shell fallback — NESTING-AWARE (F-D) + COMPACT-AWARE (F-B2) + LAST-WINS (F-C1) + ESCAPE-AWARE
+    # (F-C2). settings.json is USER-controlled (keys may be indented/reordered), so we CANNOT line-start-
+    # anchor like bd_status_read; instead track STRUCTURAL object/array depth (mirroring ops_o2) and
+    # accept a key ONLY at depth==1 (the root object's `{` opens depth 1; a key nested at depth>1 is
+    # IGNORED). The key is compared as a STRING (not a regex), so the match is injection-proof.
+    #
+    # F-B2 (compact fail-open): the depth parser opens a level only on a line that ENDS in `{`/`[`, so a
+    # COMPACT single-line object `{"enforce_release": true}` never reached depth==1 and silently returned
+    # the (advisory) DEFAULT — a FAIL-OPEN for enforce_*/require_reproduction on a python-less host (python
+    # read true, shell read false). FIX (normalize-then-reuse): NORMALIZE the document first — a string/
+    # brace/bracket-aware char walk that inserts a newline after each STRUCTURAL `{`/`[`/`,` and before
+    # each `}`/`]` — so a compact object is split one-key-per-line and the EXISTING proven depth parser
+    # reaches it. The split respects string + escape state, so a brace/comma INSIDE a quoted value (or an
+    # escaped `\"`) is never treated as a structural separator and cannot skew it (do NOT naively split).
+    # F-C1 (precedence): on DUPLICATE top-level keys python's json.load keeps the LAST; the old shell
+    # fallback short-circuited on the FIRST (`!found`). Aligned to LAST-WINS (no `!found` guard; `val` is
+    # overwritten on each top-level match, emitted at END).
+    # F-C2 (escaped quotes): the SURROUNDING quotes are stripped but escaped inner quotes are preserved,
+    # then unescaped in the shell (\\ -> \, THEN \" -> ") so a value round-trips what bd_json_escape wrote.
+    local v normalized
+    normalized="$(awk '
+      BEGIN { NL = "\n" }                                              #SETTING_NORMALIZE  (sentinel sets NL="" -> no split -> a compact object yields the default)
+      { doc = doc $0 " " }                                            # join all lines (a JSON string never spans lines, so a space-join is lossless)
+      END {
+        n = length(doc); instr = 0; esc = 0; out = ""
+        for (i = 1; i <= n; i++) {
+          c = substr(doc, i, 1)
+          if (instr) {                                                # inside a string: only an UNescaped " ends it
+            out = out c
+            if (esc)            esc = 0
+            else if (c == "\\") esc = 1
+            else if (c == "\"") instr = 0
+          } else if (c == "\"")          { instr = 1; out = out c }
+          else if (c == "{" || c == "[") out = out c NL               # opener -> newline AFTER (so the line ends in {/[)
+          else if (c == ",")             out = out c NL               # top-of-value comma -> newline AFTER (one key per line)
+          else if (c == "}" || c == "]") out = out NL c               # closer -> newline BEFORE (so a lone }/] closes depth)
+          else                           out = out c
+        }
+        printf "%s\n", out
+      }
+    ' "$file" 2>/dev/null)"
+    v=$(printf '%s\n' "$normalized" | awk -v want="$key" '
       BEGIN { depth=0; found=0 }
       {
         line=$0
-        if (!found && depth==1 && match(line, /^[[:space:]]*"[^"]*"[[:space:]]*:/)) {   #SETTING_DEPTH_RE
+        if (depth==1 && match(line, /^[[:space:]]*"[^"]*"[[:space:]]*:/)) {   #SETTING_DEPTH_RE  last-wins: no !found guard
           k=line; sub(/^[[:space:]]*"/,"",k); sub(/".*/,"",k)            # the quoted key name on this line
           if (k==want) {
             v=line
             sub(/^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*/,"",v)    # strip indent + key + colon
             sub(/[[:space:]]*,[[:space:]]*$/,"",v)                       # drop a trailing JSON comma
             sub(/[[:space:]]+$/,"",v)                                    # drop trailing whitespace
-            gsub(/"/,"",v)                                               # drop quotes (mirror the old sed)
-            val=v; found=1
+            if (v ~ /^".*"$/) v=substr(v,2,length(v)-2)                  # strip ONLY the surrounding quotes (keep escaped inner ones)   #SETTING_QSTRIP
+            val=v; found=1                                               # LAST top-level match wins (F-C1)
           }
         }
         # Structural depth AFTER the key check (an opener on THIS line raises depth for SUBSEQUENT lines).
@@ -133,7 +159,16 @@ PY
         else if (line ~ /^[[:space:]]*[]}][[:space:]]*,?[[:space:]]*$/) depth--
       }
       END { if (found) printf "%s", val }
-    ' "$file" 2>/dev/null)
+    ' 2>/dev/null)
+    # F-C2: reverse bd_json_escape (\\ -> \, THEN \" -> ") so an escaped value round-trips.
+    v="${v//\\\\/\\}"      #SETTING_UNESCAPE
+    v="${v//\\\"/\"}"
+    # F-B2 safety net: a key the (normalized) parser still can't resolve falls back to the default — but
+    # WARN so a silent enforcement DOWNGRADE on a python-less host can never pass unnoticed. (The file is
+    # known to exist here; a missing file already early-returned the default above WITHOUT warning.)
+    if [ -z "$v" ]; then
+      printf "[bd] WARN: settings key '%s' unresolved in %s; check format\n" "$key" "$file" >&2
+    fi
     printf '%s' "${v:-$def}"
   fi
 }
@@ -442,11 +477,18 @@ PY
   # leading indent + the quoted key (neither holds a ':'), so the first ':' it stops at is still the
   # key/value separator. (Line-start anchoring is valid ONLY because the writer is pretty/one-key-
   # per-line; it would be WRONG for a compact single-line writer — but this project never emits one.)
-  line="$(grep -oE "^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|[^,}[:space:]]+)" "$file" 2>/dev/null | head -n1)"  #STATUS_KEY_RE
+  # The quoted-value alternative is "(\\.|[^"\\])*" — it spans escaped chars (\" / \\) instead of the old
+  # "[^"]*" which TERMINATED at the first escaped \" (F-C2), truncating any value bd_json_escape wrote
+  # with an embedded quote/backslash. (Line-start still anchors to the real top-level key, F-#8.)
+  line="$(grep -oE "^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*(\"(\\\\.|[^\"\\\\])*\"|[^,}[:space:]]+)" "$file" 2>/dev/null | head -n1)"  #STATUS_KEY_RE
   [ -n "$line" ] || { printf ''; return 0; }
   val="$(printf '%s' "$line" | sed -E 's/^[^:]*:[[:space:]]*//')"
   case "$val" in
-    \"*\") val="${val#\"}"; val="${val%\"}" ;;
+    \"*\")
+      val="${val#\"}"; val="${val%\"}"     # strip the surrounding quotes
+      val="${val//\\\\/\\}"                 # F-C2: unescape \\ -> \  (reverse bd_json_escape step 1)
+      val="${val//\\\"/\"}"                 # then       \" -> "      (reverse bd_json_escape step 2)   #STATUS_UNESCAPE
+      ;;
     null)  val="" ;;
   esac
   printf '%s' "$val"

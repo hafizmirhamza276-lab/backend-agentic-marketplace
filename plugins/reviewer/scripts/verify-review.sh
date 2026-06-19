@@ -63,8 +63,11 @@ if [ "$BLOCK" -gt 0 ]; then STATE="failed"; VERDICT="BLOCKED ($BLOCK blocking)";
 if review_enforce; then MODE="enforce"; else MODE="advisory"; fi
 NOW="$(date -u +%FT%TZ 2>/dev/null || printf 'unknown')"
 
-# Record the per-module STATUS the release gate reads (extras: blocking/concern).
-bd_status_write reviewer review "$STATE" "" blocking="$BLOCK" concern="$CONCERN" >/dev/null 2>&1 || true
+# Record the per-module STATUS the release gate reads (extras: blocking/concern). Also STAMP the working
+# tree this review examined (F-A2), mirroring verify-build/verify-audit: the release gate's tree_stale is
+# now FAIL-CLOSED (a module with NO recorded tree reads STALE), so a fresh run must record its tree or it
+# would be falsely stale. bd_tree_digest is pure-git (no python), identical on a stub-python host.
+bd_status_write reviewer review "$STATE" "" blocking="$BLOCK" concern="$CONCERN" tree="$(bd_tree_digest)" >/dev/null 2>&1 || true
 
 # Render REVIEW.md (deterministic report, grouped by severity).
 {

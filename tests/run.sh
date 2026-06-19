@@ -259,6 +259,43 @@ rc=$(run_status "$p" "$FAKEBIN" "done" "")
 assert_eq "STATUS round-trip null coverage (omitted -> null -> reads empty)" 0 "$rc"
 
 # ---------------------------------------------------------------------------
+# SYNC SET CONSISTENCY (F-A1) — the auditor's D8 detector globs plugins/*/lib/common.sh; the
+# sync-shared FIXER and the check-shared-sync GATE must derive their destination set from that SAME
+# glob, not a hardcoded list. The old hardcoded 6-list omitted minimalist, so the fixer/gate read
+# sync=0 while D8 flagged minimalist's stale copy HIGH forever. This proves the three sets are
+# identical, that minimalist is now covered, and that a re-hardcoded fixer would be CAUGHT.
+# ---------------------------------------------------------------------------
+SS="$WORK/syncset"
+mkdir -p "$SS/scripts" "$SS/shared/lib"
+cp "$ROOT/scripts/sync-shared.sh"       "$SS/scripts/sync-shared.sh"
+cp "$ROOT/scripts/check-shared-sync.sh" "$SS/scripts/check-shared-sync.sh"
+printf '# canonical fixture lib\n' > "$SS/shared/lib/common.sh"
+# A plugin set that INCLUDES 'minimalist' (the plugin the old hardcoded 6-list omitted).
+for sp in alpha minimalist zeta; do
+  mkdir -p "$SS/plugins/$sp/lib"
+  cp "$SS/shared/lib/common.sh" "$SS/plugins/$sp/lib/common.sh"
+done
+glob_set=$( (cd "$SS" && for f in plugins/*/lib/common.sh; do printf '%s\n' "$f"; done) | sort | tr '\n' ' ')
+fixer_set=$(bash "$SS/scripts/sync-shared.sh"       2>/dev/null | sed -n 's/^synced: .* -> //p'       | sort | tr '\n' ' ')
+gate_set=$( bash "$SS/scripts/check-shared-sync.sh" 2>/dev/null | sed -n 's/^ok: \(.*\) in sync$/\1/p' | sort | tr '\n' ' ')
+assert_eq "SYNC fixer set == glob set (== D8 scan set)" "$glob_set" "$fixer_set"
+assert_eq "SYNC gate set  == glob set (== D8 scan set)" "$glob_set" "$gate_set"
+case " $fixer_set " in *" plugins/minimalist/lib/common.sh "*) ok "SYNC fixer now writes minimalist (no longer omitted)" ;; *) bad "SYNC minimalist in fixer" "absent: [$fixer_set]" ;; esac
+# Tie-in: D8, fixer, and gate all reference the IDENTICAL glob string, so "what D8 scans" == fixer/gate set.
+d8g=$(grep -cF 'plugins/*/lib/common.sh' "$ROOT/plugins/auditor/scripts/lib-audit-checks.sh" 2>/dev/null || true)
+fxg=$(grep -cF 'plugins/*/lib/common.sh' "$ROOT/scripts/sync-shared.sh"                       2>/dev/null || true)
+gtg=$(grep -cF 'plugins/*/lib/common.sh' "$ROOT/scripts/check-shared-sync.sh"                 2>/dev/null || true)
+if [ "${d8g:-0}" -ge 1 ] && [ "${fxg:-0}" -ge 1 ] && [ "${gtg:-0}" -ge 1 ]; then ok "SYNC D8 + fixer + gate all reference the identical glob plugins/*/lib/common.sh"; else bad "SYNC glob tie-in" "d8=$d8g fixer=$fxg gate=$gtg (each must be >=1)"; fi
+# SENTINEL: re-hardcode the fixer to a 2-plugin list (drop minimalist) -> its set != glob set -> caught.
+sed 's#for dest in "$ROOT"/plugins/\*/lib/common.sh#for dest in "$ROOT"/plugins/alpha/lib/common.sh "$ROOT"/plugins/zeta/lib/common.sh#' "$SS/scripts/sync-shared.sh" > "$SS/scripts/sync-hardcoded.sh"
+if cmp -s "$SS/scripts/sync-shared.sh" "$SS/scripts/sync-hardcoded.sh"; then
+  bad "SYNC sentinel mutant" "sed no-op — would be vacuous"
+else
+  mut_set=$(bash "$SS/scripts/sync-hardcoded.sh" 2>/dev/null | sed -n 's/^synced: .* -> //p' | sort | tr '\n' ' ')
+  if [ "$mut_set" != "$glob_set" ]; then ok "SYNC sentinel: re-hardcoded fixer (drops minimalist) DIFFERS from glob set -> the equality assertion has teeth"; else bad "SYNC sentinel" "hardcoded mutant matched glob set [$mut_set]"; fi
+fi
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "== summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ] || exit 1

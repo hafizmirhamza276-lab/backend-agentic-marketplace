@@ -75,6 +75,19 @@ gitfix() {
 # tasks are both covered in the CHANGELOG, builder STATUS done, a bug-fix net (BUG.md + green repro
 # ledger), and clean auditor/reviewer/ops STATUS. Writing STATUS goes through the canonical lib so it
 # round-trips with the gate's vendored copy.
+# restamp_trees <dir> : (re)write the STATUS of EVERY module the release gate's tree_stale() checks
+# (builder + the three aux gates) with the CURRENT working-tree digest. The gate is now FAIL-CLOSED
+# (F-A2): a module that records NO tree= reads STALE, and a stamp that differs from the tree now reads
+# STALE. In the real flow verify-build/audit/review/ops stamp this; the fixtures write STATUS directly,
+# so they must stamp it too. Call AFTER any commit that moves HEAD (the digest changes with it).
+restamp_trees() {
+  _d="$1"; _tg=$(CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_tree_digest')
+  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write builder  qa        done 90 tree="'"$_tg"'"'                   >/dev/null 2>&1 || true
+  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write auditor  audit     done "" high=0 med=0 low=0   tree="'"$_tg"'"' >/dev/null 2>&1 || true
+  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=0 concern=0 tree="'"$_tg"'"' >/dev/null 2>&1 || true
+  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write ops      readiness done "" blocking=0 concern=0 tree="'"$_tg"'"' >/dev/null 2>&1 || true
+}
+
 build_green() {
   d="$1"
   gitfix "$d"
@@ -87,7 +100,6 @@ build_green() {
   # exact marker the gate scans for; a bare prose "Task <id>" line would NOT satisfy the gate.
   printf '# Plan\n\n## Scope\n- a\n- b\n\n## Tasks\n### Task 1: do A\n### Task 2: do B\n' > "$d/.claude/builder/PLAN.md"
   printf '# Changelog\n\n### Task 1 — edge-case coverage\n- nil -> handled at a:1\n### Task 2 — edge-case coverage\n- nil -> handled at b:1\n' > "$d/.claude/builder/CHANGELOG.md"
-  CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
   # bug-fix net — BUG.md present + a repro ledger that records a real RED→GREEN TRANSITION (the
   # pre-fix red kept by regression-gate.sh, then the post-fix green), so bugfix-net PASSES (F-C:
   # terminal green ALONE no longer passes — an observed pre-fix red is required, not SKIPs).
@@ -95,10 +107,9 @@ build_green() {
   # command-id); both repro rows share one command id so the transition resolves per-id.
   printf '# Bug Brief\nSymptom: x\nRepro status: GREEN\n' > "$d/.claude/builder/BUG.md"
   printf 'repro\tred\tpytest_x\nrepro\tgreen\tpytest_x\nchar\tgreen\tpytest_y\n' > "$d/.claude/builder/bugfix/results.txt"
-  # auditor / reviewer / ops — all clean (0 high / 0 blocking / 0 blocking).
-  CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write auditor  audit     done "" high=0 med=0 low=0'     >/dev/null 2>&1 || true
-  CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=0 concern=0'   >/dev/null 2>&1 || true
-  CLAUDE_PROJECT_DIR="$d" bash -c '. "$LIB"; bd_status_write ops      readiness done "" blocking=0 concern=0'   >/dev/null 2>&1 || true
+  # builder + auditor/reviewer/ops STATUS — all clean (0 high / 0 blocking) AND tree-stamped to the
+  # current tree (F-A2 fail-closed: a module with no tree= would otherwise read STALE).
+  restamp_trees "$d"
 }
 
 # --- the eight single-mutation flips (each takes the fixture dir) -------------
@@ -184,7 +195,7 @@ echo ""
 # ===========================================================================
 # TIER 3 — DASHBOARD: pipeline-status.sh natively rows ALL SIX modules + never crashes.
 # ===========================================================================
-echo "-- tier 3: DASHBOARD (pipeline-status.sh — all six native rows) --"
+echo "-- tier 3: DASHBOARD (pipeline-status.sh — all seven native rows) --"
 # Refresh the pipeline verdict on the green fixture so the dashboard's pipeline row is current.
 CLAUDE_PROJECT_DIR="$G" bash "$VERIFY_RELEASE" >/dev/null 2>&1 || true
 rc=0; dout=$(CLAUDE_PROJECT_DIR="$G" bash "$PIPE_STATUS" 2>/dev/null) || rc=$?
@@ -192,7 +203,7 @@ assert_eq "T3 dashboard exits 0 on the green fixture" 0 "$rc"
 [ -n "$dout" ] && ok "T3 dashboard prints output (never silent)" || bad "T3 dashboard output" "empty"
 # The dashboard NOW natively rows all six modules (the #5 fix): explorer, builder, auditor,
 # reviewer, ops, pipeline — so a stale/failed auxiliary gate is visible here, not only in the gate.
-for m in explorer builder auditor reviewer ops pipeline; do
+for m in explorer builder auditor reviewer ops pipeline minimalist; do
   printf '%s\n' "$dout" | grep -qE "^[[:space:]]*$m[[:space:]]" && ok "T3 dashboard has a native '$m' row" || bad "T3 $m row" "no '$m' row in: $dout"
 done
 # Per-module signal on the green fixture: explorer fresh, builder/pipeline done, and — the #5 fix —
@@ -203,6 +214,19 @@ printf '%s\n' "$dout" | grep -E '^[[:space:]]*auditor'  | grep -Eq 'done.*high=0
 printf '%s\n' "$dout" | grep -E '^[[:space:]]*reviewer' | grep -Eq 'done.*blocking=0'  && ok "T3 reviewer row reflects done + blocking=0"  || bad "T3 reviewer row" "no done/blocking=0 in: $dout"
 printf '%s\n' "$dout" | grep -E '^[[:space:]]*ops'      | grep -Eq 'done.*blocking=0'  && ok "T3 ops row reflects done + blocking=0"       || bad "T3 ops row"      "no done/blocking=0 in: $dout"
 printf '%s\n' "$dout" | grep -E '^[[:space:]]*pipeline' | grep -q  'done'              && ok "T3 pipeline row reflects release=done"       || bad "T3 pipeline row" "no done state in: $dout"
+# F-B3: the dashboard now surfaces the always-on minimalist plugin AND its intensity mode. Set a mode,
+# re-render, and prove the minimalist row shows it.
+CLAUDE_PROJECT_DIR="$G" bash -c '. "$LIB"; bd_status_write minimalist mode done "" mode=lite' >/dev/null 2>&1 || true
+mout=$(CLAUDE_PROJECT_DIR="$G" bash "$PIPE_STATUS" 2>/dev/null || true)
+printf '%s\n' "$mout" | grep -E '^[[:space:]]*minimalist' | grep -q 'lite' && ok "T3 minimalist row shows its mode (lite) in the freshness column" || bad "T3 minimalist mode" "no minimalist/lite row in: $mout"
+# Sentinel: a pipeline-status WITHOUT the minimalist row (#DASH_MINIMALIST deleted) omits it -> load-bearing.
+MPS="$WORK/mut_dash"; mkdir -p "$MPS/scripts" "$MPS/lib"; cp "$LIB" "$MPS/lib/common.sh"
+sed '/#DASH_MINIMALIST/d' "$PIPE_STATUS" > "$MPS/scripts/pipeline-status.sh"
+if ! cmp -s "$PIPE_STATUS" "$MPS/scripts/pipeline-status.sh"; then ok "T3 dashboard sentinel mutant differs (#DASH_MINIMALIST row deleted)"; else bad "T3 dashboard sentinel mutant" "sed no-op — vacuous"; fi
+real_min=no; printf '%s\n' "$mout" | grep -qE '^[[:space:]]*minimalist' && real_min=yes
+mut_min_out=$(CLAUDE_PROJECT_DIR="$G" bash "$MPS/scripts/pipeline-status.sh" 2>/dev/null || true)
+mut_min=no; printf '%s\n' "$mut_min_out" | grep -qE '^[[:space:]]*minimalist' && mut_min=yes
+if [ "$real_min" = yes ] && [ "$mut_min" = no ]; then ok "T3 dashboard sentinel: real has the minimalist row, row-deleted mutant lacks it -> the row is load-bearing"; else bad "T3 dashboard sentinel" "real_min=$real_min mut_min=$mut_min (want yes/no)"; fi
 # Never crashes on a bare project with no .claude STATUS at all; the auxiliary-gate rows read "not run".
 EMPTY="$WORK/empty"; mkdir -p "$EMPTY"
 rc=0; eout=$(CLAUDE_PROJECT_DIR="$EMPTY" bash "$PIPE_STATUS" 2>/dev/null) || rc=$?
@@ -273,6 +297,9 @@ relsrc() {
   git -C "$1" -c user.email=t@e -c user.name=t commit -qm app >/dev/null 2>&1 || true
   nh=$(git -C "$1" rev-parse HEAD 2>/dev/null || printf x)
   { printf 'explored_commit: %s\n' "$nh"; printf 'coverage: 90%%\n'; } > "$1/.claude/explorer/MEMORY.md"
+  # The app.py commit MOVED HEAD, so build_green's tree stamps are now stale -> re-stamp every module
+  # against the NEW current tree (otherwise the fail-closed gate (F-A2) would read them all stale).
+  restamp_trees "$1"
 }
 # (a) matching tree + clean working tree -> RELEASE READY.
 TF="$WORK/fb_match"; relsrc "$TF"
@@ -299,14 +326,71 @@ CLAUDE_PROJECT_DIR="$VB" bash -c '. "$LIB"; bd_status_write builder qa done 90' 
 CLAUDE_PROJECT_DIR="$VB" bash "$VERIFY_BUILD" >/dev/null 2>&1 || true
 vbtree=$(CLAUDE_PROJECT_DIR="$VB" bash -c '. "$LIB"; bd_status_read builder tree' 2>/dev/null || true)
 [ -n "$vbtree" ] && ok "T6 verify-build stamps builder tree= on a passing build" || bad "T6 vb stamp" "builder tree empty after verify-build"
-# (e) sentinel: neuter the dirty check (#F_B_DIRTY) -> a dirty fixture (builder has no tree=) PASSES.
+# (e) sentinel: neuter the dirty check (#F_B_DIRTY) -> the dirty fixture must then PASS. Re-stamp all
+# modules to the CURRENT (dirty) tree FIRST so ONLY the dirty check can fail — otherwise the uncommitted
+# edit also trips tree_stale on every module (their stamps predate the edit) and the dirty-neutered
+# mutant would still BLOCK on tree_stale, masking the sentinel.
 SF="$WORK/fb_sentinel"; relsrc "$SF"; printf 'print(3)\n' >> "$SF/app.py"   # uncommitted -> dirty
+restamp_trees "$SF"                                                         # stamp the dirty digest -> tree_stale silent -> isolates #F_B_DIRTY
 MUTF="$WORK/mut_fresh"; mkdir -p "$MUTF/scripts" "$MUTF/lib"; cp "$LIB" "$MUTF/lib/common.sh"
 sed '/#F_B_DIRTY/ s/-n "\$TREE_DIRTY"/-z "$TREE_DIRTY"/' "$VERIFY_RELEASE" > "$MUTF/scripts/verify-release.sh"
 if ! cmp -s "$VERIFY_RELEASE" "$MUTF/scripts/verify-release.sh"; then ok "T6 sentinel mutant differs (#F_B_DIRTY neutered by sed)"; else bad "T6 sentinel mutant" "sed no-op — sentinel would be vacuous"; fi
 fb_real=0; CLAUDE_PROJECT_DIR="$SF" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || fb_real=$?
 fb_mut=0;  CLAUDE_PROJECT_DIR="$SF" PIPELINE_ENFORCE=1 bash "$MUTF/scripts/verify-release.sh" >/dev/null 2>&1 || fb_mut=$?
 if [ "$fb_real" = 2 ] && [ "$fb_mut" = 0 ]; then ok "T6 sentinel: real BLOCKS(2) on dirty tree, mutant PASSES(0) -> dirty check load-bearing"; else bad "T6 sentinel" "real=$fb_real(want 2) mut=$fb_mut(want 0)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 7 — FAIL-CLOSED aux-gate freshness (F-A2). tree_stale() previously returned "not stale" for a
+# module that recorded NO tree= — and verify-audit/review/ops never stamped one — so a post-gate COMMIT
+# (clean tree; the dirty check at #F_B_DIRTY does NOT catch a committed change) shipped on a STALE-but-
+# green aux STATUS that never inspected the new code. The fix: (a) verify-audit/review/ops now STAMP
+# tree=; (b) tree_stale is FAIL-CLOSED (no record -> stale). Proven per aux module + a sentinel.
+# ===========================================================================
+echo "-- tier 7: FAIL-CLOSED aux freshness (F-A2) --"
+VERIFY_AUDIT="$ROOT/plugins/auditor/scripts/verify-audit.sh"
+VERIFY_REVIEW="$ROOT/plugins/reviewer/scripts/verify-review.sh"
+VERIFY_OPS="$ROOT/plugins/ops/scripts/verify-ops.sh"
+# (a) freshly-stamped green fixture -> READY (control; build_green's stamps match the tree now).
+FC="$WORK/fc_fresh"; build_green "$FC"
+rc=0; CLAUDE_PROJECT_DIR="$FC" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T7 freshly-stamped aux modules -> release READY (exit 0)" 0 "$rc"
+# (b) an aux module (auditor) present with NO tree record -> FAILS fail-closed (the F-A2 core).
+FN="$WORK/fc_norec"; build_green "$FN"
+CLAUDE_PROJECT_DIR="$FN" bash -c '. "$LIB"; bd_status_write auditor audit done "" high=0 med=0 low=0' >/dev/null 2>&1 || true   # rewrite WITHOUT tree=
+rc=0; CLAUDE_PROJECT_DIR="$FN" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T7 auditor STATUS with NO tree record -> release BLOCKS (exit 2, fail-closed)" 2 "$rc"
+rel_has "$FN" 'auditor.*different working tree' && ok "T7 RELEASE.md cites the auditor stale/no-record reason" || bad "T7 norec reason" "missing"
+# (c) aux run at HEAD, then a real COMMIT moves the tree -> that module's stamp mismatches -> FAILS.
+FM="$WORK/fc_moved"; build_green "$FM"
+printf 'print(9)\n' > "$FM/src.py"; git -C "$FM" add src.py >/dev/null 2>&1
+git -C "$FM" -c user.email=t@e -c user.name=t commit -qm src >/dev/null 2>&1 || true
+nh=$(git -C "$FM" rev-parse HEAD 2>/dev/null || printf x); { printf 'explored_commit: %s\n' "$nh"; printf 'coverage: 90%%\n'; } > "$FM/.claude/explorer/MEMORY.md"
+# Re-stamp builder/reviewer/ops to the NEW tree so ONLY auditor (left on its pre-commit stamp) is stale.
+NTG=$(CLAUDE_PROJECT_DIR="$FM" bash -c '. "$LIB"; bd_tree_digest')
+CLAUDE_PROJECT_DIR="$FM" bash -c '. "$LIB"; bd_status_write builder  qa        done 90 tree="'"$NTG"'"'                    >/dev/null 2>&1 || true
+CLAUDE_PROJECT_DIR="$FM" bash -c '. "$LIB"; bd_status_write reviewer review    done "" blocking=0 concern=0 tree="'"$NTG"'"' >/dev/null 2>&1 || true
+CLAUDE_PROJECT_DIR="$FM" bash -c '. "$LIB"; bd_status_write ops      readiness done "" blocking=0 concern=0 tree="'"$NTG"'"' >/dev/null 2>&1 || true
+rc=0; CLAUDE_PROJECT_DIR="$FM" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
+assert_eq "T7 auditor stamped against an OLD tree + a commit moved it -> release BLOCKS (exit 2)" 2 "$rc"
+rel_has "$FM" 'auditor.*different working tree' && ok "T7 RELEASE.md cites the auditor tree mismatch" || bad "T7 moved reason" "missing"
+# (d) verify-audit / verify-review / verify-ops STAMP tree= on a real run (mirrors verify-build, T6d).
+for vt in "auditor:$VERIFY_AUDIT" "reviewer:$VERIFY_REVIEW" "ops:$VERIFY_OPS"; do
+  m=${vt%%:*}; sc=${vt#*:}
+  VS="$WORK/fc_stamp_$m"; build_green "$VS"
+  CLAUDE_PROJECT_DIR="$VS" bash -c '. "$LIB"; bd_status_write '"$m"' x done' >/dev/null 2>&1 || true   # clear tree=
+  CLAUDE_PROJECT_DIR="$VS" bash "$sc" >/dev/null 2>&1 || true
+  vtree=$(CLAUDE_PROJECT_DIR="$VS" bash -c '. "$LIB"; bd_status_read '"$m"' tree' 2>/dev/null || true)
+  [ -n "$vtree" ] && ok "T7 verify-$m stamps $m tree= on a run" || bad "T7 $m stamp" "$m tree empty after verify-$m"
+done
+# (e) sentinel: revert the fail-closed flip (#F_B_NOREC return 0 -> return 1) -> a NO-tree auditor PASSES
+# the mutant while the real gate BLOCKS -> the fail-closed flip is load-bearing.
+MUTNR="$WORK/mut_norec"; mkdir -p "$MUTNR/scripts" "$MUTNR/lib"; cp "$LIB" "$MUTNR/lib/common.sh"
+sed '/#F_B_NOREC/ s/return 0/return 1/' "$VERIFY_RELEASE" > "$MUTNR/scripts/verify-release.sh"
+if ! cmp -s "$VERIFY_RELEASE" "$MUTNR/scripts/verify-release.sh"; then ok "T7 sentinel mutant differs (#F_B_NOREC flip reverted by sed)"; else bad "T7 sentinel mutant" "sed no-op — vacuous"; fi
+nr_real=0; CLAUDE_PROJECT_DIR="$FN" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE"                  >/dev/null 2>&1 || nr_real=$?
+nr_mut=0;  CLAUDE_PROJECT_DIR="$FN" PIPELINE_ENFORCE=1 bash "$MUTNR/scripts/verify-release.sh" >/dev/null 2>&1 || nr_mut=$?
+if [ "$nr_real" = 2 ] && [ "$nr_mut" = 0 ]; then ok "T7 sentinel: real BLOCKS(2) a no-tree aux module, mutant (no-record->not-stale) PASSES(0) -> fail-closed flip load-bearing"; else bad "T7 sentinel" "real=$nr_real(want 2) mut=$nr_mut(want 0)"; fi
 echo ""
 
 echo "== e2e ladder summary: $PASS passed, $FAIL failed =="

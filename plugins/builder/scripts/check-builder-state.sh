@@ -3,7 +3,9 @@
 # 1) bootstrap .claude/builder/settings.json with safe defaults (once)
 # 2) verify explorer memory exists & is fresh (builder depends on it)
 # 3) nudge the orchestrator to RECALL rather than re-scan
-set -euo pipefail
+# NOT errexit (F-A4): a SessionStart gate under `set -e` aborts on the first unexpected non-zero
+# (a grep no-match, git in a non-repo, a bd_ helper returning 1) and the nudges below never emit.
+set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$DIR/../lib/common.sh"

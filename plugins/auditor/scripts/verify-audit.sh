@@ -63,8 +63,11 @@ if [ "$HIGH" -gt 0 ]; then STATE="failed"; VERDICT="BLOCKED ($HIGH high)"; else 
 if audit_enforce; then MODE="enforce"; else MODE="advisory"; fi
 NOW="$(date -u +%FT%TZ 2>/dev/null || printf 'unknown')"
 
-# Record the per-module STATUS the release gate reads (Section A extras: high/med/low).
-bd_status_write auditor audit "$STATE" "" high="$HIGH" med="$MED" low="$LOW" >/dev/null 2>&1 || true
+# Record the per-module STATUS the release gate reads (Section A extras: high/med/low). Also STAMP the
+# working tree this audit examined (F-A2), mirroring verify-build.sh: the release gate's tree_stale is
+# now FAIL-CLOSED (a module with NO recorded tree reads STALE), so a fresh run must record its tree or
+# it would be falsely stale. bd_tree_digest is pure-git (no python), identical on a stub-python host.
+bd_status_write auditor audit "$STATE" "" high="$HIGH" med="$MED" low="$LOW" tree="$(bd_tree_digest)" >/dev/null 2>&1 || true
 
 # Render FINDINGS.md (deterministic report, grouped by severity).
 {

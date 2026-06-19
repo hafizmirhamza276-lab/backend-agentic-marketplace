@@ -2,7 +2,9 @@
 # record-progress.sh — SubagentStop gate (advisory, never blocks).
 # Appends a timestamped breadcrumb to .claude/builder/CHANGELOG.md so a fresh
 # session can reconstruct what happened without re-reading sub-agent transcripts.
-set -euo pipefail
+# NOT errexit (F-A4): under `set -e` an unexpected non-zero would abort this advisory gate before it
+# records the breadcrumb; it must never crash a turn, so failures are tolerated explicitly instead.
+set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$DIR/../lib/common.sh"

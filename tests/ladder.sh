@@ -282,11 +282,13 @@ printf '# BUG\n' > "$BR/.claude/builder/BUG.md"; printf 'repro\tred\tpytest x\nc
 NC=$(mkproj rel_nc); fresh_mem "$NC"; mkdir -p "$NC/.claude/builder"
 GAP=$(mkproj rel_gap); fresh_mem "$GAP"; mkdir -p "$GAP/.claude/builder"
 printf '# Plan\n## Tasks\n### Task 1 a\n### Task 2 b\n' > "$GAP/.claude/builder/PLAN.md"; printf '# Changelog\nTask 1 covered\n' > "$GAP/.claude/builder/CHANGELOG.md"
-# Batch all builder STATUS writes in one process (done everywhere except the not-done
-# fixture). Under FAKEBIN so it's fast (shell writer); the gate's verdict is python-free and
-# tier 6 separately covers the gate under real/stub/none python.
+# Batch all builder STATUS writes in one process (done everywhere except the not-done fixture). Under
+# FAKEBIN so it's fast (shell writer); the gate's verdict is python-free and tier 6 separately covers the
+# gate under real/stub/none python. Each write STAMPS tree= for its own fixture: the release gate's
+# tree_stale is now FAIL-CLOSED (F-A2), so a builder STATUS with no recorded tree would read STALE and
+# wrongly block the PASS fixture (bd_tree_digest is pure-git, fine under FAKEBIN).
 printf '%s\tdone\n%s\tdone\n%s\trunning\n%s\tdone\n%s\tdone\n%s\tdone\n' "$PASSP" "$ST" "$ND" "$BR" "$NC" "$GAP" \
-  | PATH="$FAKEBIN:$PATH" bash -c '. "$LIB"; while IFS="$(printf "\t")" read -r prj st; do CLAUDE_PROJECT_DIR="$prj" bd_status_write builder qa "$st" >/dev/null 2>&1 || true; done' || true
+  | PATH="$FAKEBIN:$PATH" bash -c '. "$LIB"; while IFS="$(printf "\t")" read -r prj st; do tg=$(CLAUDE_PROJECT_DIR="$prj" bd_tree_digest); CLAUDE_PROJECT_DIR="$prj" bd_status_write builder qa "$st" "" tree="$tg" >/dev/null 2>&1 || true; done' || true
 # Run all gate invocations in parallel (FAKEBIN -> the gate's python-free path).
 release_to_file "$PARDIR/r_pass_a.rc" "$PASSP" 0 "$FAKEBIN" &
 release_to_file "$PARDIR/r_pass_e.rc" "$PASSP" 1 "$FAKEBIN" &
@@ -593,6 +595,8 @@ add9 "TR3 (control) in-project out-of-zone source -> BLOCKED" 2 "$RPROJ" "{\"too
 add9 "TR4 (F2) .claude/explorer/../../evil traversal -> BLOCKED" 2 "$RPROJ" '{"tool_input":{"file_path":".claude/explorer/../../evil"}}'
 # TR5 (F9 preserved) NotebookEdit under the zone (notebook_path) -> ALLOWED.
 add9 "TR5 (F9) NotebookEdit under the zone -> ALLOWED" 0 "$RPROJ" '{"tool_input":{"notebook_path":".claude/explorer/nb.ipynb"}}'
+# TR7 (F-B1) a payload that resolves NO write target -> BLOCKED fail-closed (was allowed: a fail-open).
+add9 "TR7 (F-B1) payload with no resolvable path -> BLOCKED (fail-closed)" 2 "$RPROJ" '{"tool_name":"Write","tool_input":{}}'
 run_guard_cases "$T9CASES"
 
 # TR6 MUTATION SENTINEL: revert the anchored allow back to the OLD substring form -> TR2's
@@ -605,6 +609,15 @@ TR2JSON=$(printf '{"tool_input":{"file_path":"%s/.claude/explorer/evil.md"}}' "$
 ro_real=0; printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$GUARD_READONLY"                >/dev/null 2>&1 || ro_real=$?
 ro_mut=0;  printf '%s' "$TR2JSON" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$MRO/scripts/guard-readonly.sh" >/dev/null 2>&1 || ro_mut=$?
 if [ "$ro_real" = 2 ] && [ "$ro_mut" = 0 ]; then ok "T9 Defect-#3 sentinel: real BLOCKS(2), mutant PASSES(0) -> \$ZONE prefix anchor load-bearing"; else bad "T9 Defect-#3 sentinel" "real=$ro_real(want 2) mut=$ro_mut(want 0)"; fi
+# TR8 (F-B1) MUTATION SENTINEL: revert the fail-closed default (#READONLY_DEFAULT block -> allow) -> the
+# no-path payload (which the REAL guard BLOCKS) PASSES the mutant -> the fail-closed default is load-bearing.
+MRD="$WORK/mut_ro_default"; mkdir -p "$MRD/scripts" "$MRD/lib"; cp "$LIB" "$MRD/lib/common.sh"
+sed '/#READONLY_DEFAULT/ s/DEFAULT="block"/DEFAULT="allow"/' "$GUARD_READONLY" > "$MRD/scripts/guard-readonly.sh"
+if ! cmp -s "$GUARD_READONLY" "$MRD/scripts/guard-readonly.sh"; then ok "T9 TR8 mutant differs (#READONLY_DEFAULT flipped to allow)"; else bad "T9 TR8 mutant" "sed no-op — vacuous"; fi
+NP='{"tool_name":"Write","tool_input":{}}'
+np_real=0; printf '%s' "$NP" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$GUARD_READONLY"                >/dev/null 2>&1 || np_real=$?
+np_mut=0;  printf '%s' "$NP" | PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$RPROJ" bash "$MRD/scripts/guard-readonly.sh" >/dev/null 2>&1 || np_mut=$?
+if [ "$np_real" = 2 ] && [ "$np_mut" = 0 ]; then ok "T9 TR8 sentinel: real BLOCKS(2) a no-path payload, allow-default mutant PASSES(0) -> fail-closed default load-bearing"; else bad "T9 TR8 sentinel" "real=$np_real(want 2) mut=$np_mut(want 0)"; fi
 echo ""
 
 # ===========================================================================
@@ -625,7 +638,9 @@ tlog "tier10 start"; echo "-- tier 10: REGRESSION coverage requires a STRUCTURED
 # cov_fix <name> : fresh explorer memory + builder STATUS done + empty .claude/builder. Prints dir.
 cov_fix() {
   _d=$(mkproj "$1"); fresh_mem "$_d"; mkdir -p "$_d/.claude/builder"
-  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+  # Stamp builder tree= (F-A2 fail-closed): without it the builder reads STALE and adds a SECOND required
+  # failure, which would break TC1's "coverage is the SOLE blocker" assertion and the TC2/TC3b READY ones.
+  CLAUDE_PROJECT_DIR="$_d" bash -c '. "$LIB"; bd_status_write builder qa done "" tree="$(bd_tree_digest)"' >/dev/null 2>&1 || true
   printf '%s' "$_d"
 }
 
@@ -816,14 +831,27 @@ else
   skipnote "T12 TG3 py=none PATH unavailable on this host (stub fallback already proven by TG1)"
 fi
 
-# TG4 MUTATION SENTINEL: neuter the depth guard (depth==1 -> depth>=0) on the #SETTING_DEPTH_RE line
-# and prove TG1's fixture now mis-reads the nested `false` (mutant) while the real lib reads `true`.
+# TG4 MUTATION SENTINEL: neuter the depth guard (depth==1 -> depth>=0) on the #SETTING_DEPTH_RE line and
+# prove a fixture whose NESTED enforce_release sits AFTER the top-level one now mis-reads the nested
+# `false` (mutant) while the real lib reads the top-level `true`. The nested key must come AFTER the real
+# one: with the last-wins fix (F-C1) a depth-blind mutant keeps the LAST match, so only a nested-AFTER-top
+# layout exposes the missing depth guard (a nested-BEFORE layout would coincidentally still read the
+# top-level true under last-wins, masking the regression).
+SJ_ADV2="$WORK/settings_adv2.json"
+{
+  printf '{\n'
+  printf '  "enforce_release": true,\n'
+  printf '  "profiles": {\n'
+  printf '    "enforce_release": false\n'
+  printf '  }\n'
+  printf '}\n'
+} > "$SJ_ADV2"
 MSA="$WORK/mut_setting_at"; mkdir -p "$MSA"
 sed '/#SETTING_DEPTH_RE/ s/depth==1/depth>=0/' "$LIB" > "$MSA/common.sh"
 if ! cmp -s "$LIB" "$MSA/common.sh"; then ok "T12 TG4 mutant differs from real lib (depth guard neutered by sed)"; else bad "T12 TG4 mutant" "sed no-op — sentinel would be vacuous"; fi
-sa_real=$(setat_fb "$SJ_ADV" enforce_release false "$LIB")
-sa_mut=$(setat_fb "$SJ_ADV" enforce_release false "$MSA/common.sh")
-if [ "$sa_real" = true ] && [ "$sa_mut" = false ]; then ok "T12 TG4 sentinel: real reads true, depth-blind mutant reads false -> depth guard load-bearing"; else bad "T12 TG4 sentinel" "real=$sa_real(want true) mut=$sa_mut(want false)"; fi
+sa_real=$(setat_fb "$SJ_ADV2" enforce_release false "$LIB")
+sa_mut=$(setat_fb "$SJ_ADV2" enforce_release false "$MSA/common.sh")
+if [ "$sa_real" = true ] && [ "$sa_mut" = false ]; then ok "T12 TG4 sentinel: real reads true (top-level), depth-blind mutant reads nested false -> depth guard load-bearing"; else bad "T12 TG4 sentinel" "real=$sa_real(want true) mut=$sa_mut(want false)"; fi
 echo ""
 
 # ===========================================================================
@@ -872,7 +900,8 @@ mk_rel() {
   printf '# c\n'   > "$_d/.claude/builder/CHANGELOG.md"
   printf '# BUG\n' > "$_d/.claude/builder/BUG.md"
   printf '%b' "$2" > "$_d/.claude/builder/bugfix/results.txt"
-  CLAUDE_PROJECT_DIR="$_d" LIB="$LIB" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+  # Stamp builder tree= (F-A2 fail-closed) so TR2's genuine red→green fixture reaches READY (exit 0).
+  CLAUDE_PROJECT_DIR="$_d" LIB="$LIB" bash -c '. "$LIB"; bd_status_write builder qa done "" tree="$(bd_tree_digest)"' >/dev/null 2>&1 || true
   printf '%s' "$_d"
 }
 # TR1: an always-green repro (green now, NEVER observed red) -> bugfix-net FAILS (no transition).
@@ -950,6 +979,47 @@ assert_eq "T14 BW4 explorer: Bash 'sed -i' OUT-of-zone src/app.py BLOCKED exit 2
 assert_eq "T14 BW5 explorer: redirect INTO .claude/explorer allowed exit 0"          0 "$(bashw_guard "$BWE" 'echo x > .claude/explorer/notes.md' "$GUARD_BASH_E")"
 assert_eq "T14 BW5b explorer: exfil .claude/explorer -> /tmp BLOCKED exit 2"         2 "$(bashw_guard "$BWE" 'cat .claude/explorer/m > /tmp/exfil' "$GUARD_BASH_E")"
 
+# --- F-A3: the threat-model gap — commands that produced NO target and were waved through. The
+# extended guard DENIES interpreter inline-eval (opaque write surface) + patch/git-apply/awk-inplace,
+# and adds rm/rmdir/mkdir/chmod/chown/sponge/find-delete to target extraction. EVERY evasion exemplar
+# must now BLOCK; the controls (plain script/module runs, read-only, in-zone mutations) must ALLOW.
+# (builder) BLOCK — interpreter inline-eval, opaque patch/apply/awk-inplace, and out-of-scope verbs.
+for c in \
+  'python3 -c open(1)' 'node -e x' 'perl -e x' 'ruby -e x' 'deno eval x' \
+  'git apply foo.patch' 'patch src/app.py' 'awk -i inplace {print} src/app.py' \
+  'rm -rf src/app.py' 'rmdir src/dir' 'mkdir src/newdir' 'chmod 755 src/app.py' 'chown me src/app.py' \
+  'sponge src/app.py' 'find . -delete'; do
+  assert_eq "T14 F-A3 builder BLOCKS evasion [$c]" 2 "$(bashw_guard "$BWB" "$c")"
+done
+# (builder) ALLOW — plain script/module runs (NOT inline-eval), read-only, and IN-zone/IN-scope mutation.
+for c in 'python -m pytest' 'node script.js' 'python file.py' 'cat src/app.py' \
+  'mkdir .claude/builder/sub' 'rm .claude/builder/old' 'chmod 755 src/allowed.py'; do
+  assert_eq "T14 F-A3 builder ALLOWS control [$c]" 0 "$(bashw_guard "$BWB" "$c")"
+done
+# (explorer) the same gap judged against the .claude/explorer/ zone.
+for c in 'python3 -c x' 'rm -rf src/app.py' 'find . -delete' 'chmod 755 src/app.py'; do
+  assert_eq "T14 F-A3 explorer BLOCKS evasion [$c]" 2 "$(bashw_guard "$BWE" "$c" "$GUARD_BASH_E")"
+done
+for c in 'python -m pytest' 'rm .claude/explorer/old' 'mkdir .claude/explorer/sub'; do
+  assert_eq "T14 F-A3 explorer ALLOWS control [$c]" 0 "$(bashw_guard "$BWE" "$c" "$GUARD_BASH_E")"
+done
+# BW7 sentinel (eval-deny): invert the interpreter match (#BASHWRITE_EVAL_DENY c~ -> c!~) -> `python3 -c`
+# (which the REAL guard BLOCKS) PASSES the mutant -> the inline-eval DENY is load-bearing.
+MEV="$WORK/mut_bash_eval"; mkdir -p "$MEV/scripts" "$MEV/lib"; cp "$LIB" "$MEV/lib/common.sh"
+sed '/#BASHWRITE_EVAL_DENY/ s/c ~ /c !~ /' "$GUARD_BASH_B" > "$MEV/scripts/guard-bash-write.sh"
+if ! cmp -s "$GUARD_BASH_B" "$MEV/scripts/guard-bash-write.sh"; then ok "T14 BW7 mutant differs (interpreter match inverted)"; else bad "T14 BW7 mutant" "sed no-op — vacuous"; fi
+ev_real=$(bashw_guard "$BWB" 'python3 -c open(1)'); ev_mut=$(bashw_guard "$BWB" 'python3 -c open(1)' "$MEV/scripts/guard-bash-write.sh")
+if [ "$ev_real" = 2 ] && [ "$ev_mut" = 0 ]; then ok "T14 BW7 sentinel: real BLOCKS(2) python -c, eval-deny-neutered mutant ALLOWS(0) -> inline-eval DENY load-bearing"; else bad "T14 BW7 sentinel" "real=$ev_real(want 2) mut=$ev_mut(want 0)"; fi
+# BW8 sentinel (mutating verbs): neuter the rm/rmdir/mkdir extraction (#BASHWRITE_MUT_VERBS) -> `rm -rf`
+# out-of-scope (which the REAL guard BLOCKS) PASSES the mutant -> the expanded verb set is load-bearing.
+MMV="$WORK/mut_bash_verbs"; mkdir -p "$MMV/scripts" "$MMV/lib"; cp "$LIB" "$MMV/lib/common.sh"
+sed '/#BASHWRITE_MUT_VERBS/ s/w=="rm"/w=="rmZZZ"/' "$GUARD_BASH_B" > "$MMV/scripts/guard-bash-write.sh"
+if ! cmp -s "$GUARD_BASH_B" "$MMV/scripts/guard-bash-write.sh"; then ok "T14 BW8 mutant differs (rm verb neutered)"; else bad "T14 BW8 mutant" "sed no-op — vacuous"; fi
+mv_real=$(bashw_guard "$BWB" 'rm -rf src/app.py'); mv_mut=$(bashw_guard "$BWB" 'rm -rf src/app.py' "$MMV/scripts/guard-bash-write.sh")
+if [ "$mv_real" = 2 ] && [ "$mv_mut" = 0 ]; then ok "T14 BW8 sentinel: real BLOCKS(2) out-of-scope rm, verb-neutered mutant ALLOWS(0) -> expanded verb set load-bearing"; else bad "T14 BW8 sentinel" "real=$mv_real(want 2) mut=$mv_mut(want 0)"; fi
+# The two guard copies (builder + explorer) MUST stay byte-identical (the audit/ladder both rely on it).
+if cmp -s "$GUARD_BASH_B" "$GUARD_BASH_E"; then ok "T14 builder + explorer guard-bash-write.sh are byte-identical"; else bad "T14 guard copies" "builder vs explorer differ"; fi
+
 # (a) the strictly read-only agent frontmatters must NO LONGER grant Bash.
 nb=0
 for a in explorer/explorer-scout explorer/explorer-sage auditor/auditor-scout auditor/auditor-critical reviewer/reviewer-scout reviewer/reviewer-critical ops/ops-scout ops/ops-critical; do
@@ -965,6 +1035,68 @@ if ! cmp -s "$GUARD_BASH_B" "$MBW/scripts/guard-bash-write.sh"; then ok "T14 BW6
 bw_real=$(bashw_guard "$BWB" 'sed -i s/x/y/ src/app.py')
 bw_mut=$(bashw_guard "$BWB" 'sed -i s/x/y/ src/app.py' "$MBW/scripts/guard-bash-write.sh")
 if [ "$bw_real" = 2 ] && [ "$bw_mut" = 0 ]; then ok "T14 BW6 sentinel: real BLOCKS(2), mutant ALLOWS(0) -> in-zone check load-bearing"; else bad "T14 BW6 sentinel" "real=$bw_real(want 2) mut=$bw_mut(want 0)"; fi
+echo ""
+
+# ===========================================================================
+# TIER 15 — REGRESSION: bd_setting_at COMPACT-aware (F-B2) + LAST-WINS (F-C1), and bd_status_read
+# ESCAPED-QUOTE round-trip (F-C2). All force the python-FREE fallback (FAKEBIN shadows python) — these
+# are python-less-ONLY defects (the python branch uses json.load and was always correct).
+#   F-B2  a COMPACT single-line `{"enforce_release":true}` previously never reached depth==1 (the depth
+#         parser opens a level only on a line ENDING in `{`), so it returned the advisory DEFAULT — a
+#         FAIL-OPEN for enforce_*. The normalize-then-reuse fix splits a compact object one-key-per-line
+#         so the proven depth parser reads `true`. A nested `false` (compact or pretty) still must NOT
+#         shadow the real top-level. A key the parser CANNOT resolve warns to stderr (no silent downgrade).
+#   F-C1  duplicate top-level keys: python json.load keeps the LAST; the shell fallback now matches it
+#         (dropped the !found first-wins short-circuit).
+#   F-C2  bd_status_read round-trips an adversarial value bd_json_escape wrote (a"b\c): the grep spans
+#         escaped \" / \\ and the reader unescapes them, instead of truncating at the first escaped quote.
+#   Sentinels: neuter the normalizer (NL="") -> compact yields the default; re-add !found -> first-wins;
+#   delete the status unescape -> the adversarial value comes back MANGLED.
+# ===========================================================================
+tlog "tier15 start"; echo "-- tier 15: REGRESSION bd_setting_at compact/last-wins + bd_status_read escaped-quote --"
+# --- F-B2 compact (the fix) + controls ---
+SC_COMPACT="$WORK/s15_compact.json"; printf '{"enforce_release": true}'                                      > "$SC_COMPACT"
+SC_PRETTY="$WORK/s15_pretty.json";   printf '{\n  "enforce_release": true\n}\n'                               > "$SC_PRETTY"
+SC_NESTC="$WORK/s15_nestc.json";     printf '{"profiles":{"enforce_release":false},"enforce_release":true}'   > "$SC_NESTC"
+assert_eq "T15 F-B2 COMPACT {\"enforce_release\":true} -> reads true (was default: fail-open)" true "$(setat_fb "$SC_COMPACT" enforce_release false)"
+assert_eq "T15 F-B2 pretty control still reads true"                                           true "$(setat_fb "$SC_PRETTY" enforce_release false)"
+assert_eq "T15 F-B2 compact+nested: nested false does NOT shadow real top-level true"          true "$(setat_fb "$SC_NESTC" enforce_release false)"
+# absent/unresolvable key -> default + WARN to stderr (no silent downgrade). Capture stderr explicitly.
+warnf="$WORK/s15_warn.txt"
+av=$(PATH="$FAKEBIN:$PATH" LIB="$LIB" bash "$LIBHELPER" setting_at "$SC_PRETTY" no_such_key DEFLT 2>"$warnf")
+assert_eq "T15 F-B2 absent key -> default" DEFLT "$av"
+if grep -q "no_such_key" "$warnf" && grep -qi "unresolved" "$warnf"; then ok "T15 F-B2 unresolved key WARNs to stderr (no silent downgrade)"; else bad "T15 F-B2 WARN" "no WARN: [$(cat "$warnf" 2>/dev/null)]"; fi
+# --- F-C1 last-wins (duplicate top-level key) ---
+SC_DUP="$WORK/s15_dup.json";   printf '{\n  "k": false,\n  "k": true\n}\n' > "$SC_DUP"
+SC_DUPC="$WORK/s15_dupc.json"; printf '{"k":false,"k":true}'               > "$SC_DUPC"
+assert_eq "T15 F-C1 duplicate PRETTY {\"k\":false,\"k\":true} -> true (last-wins, matches python)" true "$(setat_fb "$SC_DUP" k x)"
+assert_eq "T15 F-C1 duplicate COMPACT {\"k\":false,\"k\":true} -> true (last-wins)"                true "$(setat_fb "$SC_DUPC" k x)"
+# --- F-C2 bd_status_read escaped-quote round-trip (shell writer + shell reader) ---
+ADV15='a"b\c'
+P15=$(mkproj t15_status)
+PATH="$FAKEBIN:$PATH" CLAUDE_PROJECT_DIR="$P15" LIB="$LIB" bash "$LIBHELPER" swrite advx phaseX "$ADV15" 5 >/dev/null 2>&1 || true
+assert_eq "T15 F-C2 bd_status_read round-trips adversarial a\"b\\c (shell writer+reader)" "$ADV15" "$(sread_fb "$P15" advx state)"
+# --- SENTINEL (F-B2 normalize): NL="" -> a compact object is NOT split -> reads the default ---
+MNORM="$WORK/mut_normalize"; mkdir -p "$MNORM"
+sed '/#SETTING_NORMALIZE/ s/NL = "\\n"/NL = ""/' "$LIB" > "$MNORM/common.sh"
+if ! cmp -s "$LIB" "$MNORM/common.sh"; then ok "T15 normalize mutant differs (NL=\"\" by sed)"; else bad "T15 normalize mutant" "sed no-op — vacuous"; fi
+nz_real=$(setat_fb "$SC_COMPACT" enforce_release false "$LIB")
+nz_mut=$(setat_fb "$SC_COMPACT" enforce_release false "$MNORM/common.sh")
+if [ "$nz_real" = true ] && [ "$nz_mut" = false ]; then ok "T15 normalize sentinel: real reads true, un-normalized mutant reads default(false) -> compact normalize load-bearing"; else bad "T15 normalize sentinel" "real=$nz_real(want true) mut=$nz_mut(want false)"; fi
+# --- SENTINEL (F-C1 last-wins): re-add the !found guard -> first-wins -> duplicate reads false ---
+MFW="$WORK/mut_firstwins"; mkdir -p "$MFW"
+sed '/#SETTING_DEPTH_RE/ s/if (depth==1/if (!found \&\& depth==1/' "$LIB" > "$MFW/common.sh"
+if ! cmp -s "$LIB" "$MFW/common.sh"; then ok "T15 last-wins mutant differs (!found re-added by sed)"; else bad "T15 last-wins mutant" "sed no-op — vacuous"; fi
+fw_real=$(setat_fb "$SC_DUP" k x "$LIB")
+fw_mut=$(setat_fb "$SC_DUP" k x "$MFW/common.sh")
+if [ "$fw_real" = true ] && [ "$fw_mut" = false ]; then ok "T15 last-wins sentinel: real reads true (last), first-wins mutant reads false -> last-wins load-bearing"; else bad "T15 last-wins sentinel" "real=$fw_real(want true) mut=$fw_mut(want false)"; fi
+# --- SENTINEL (F-C2 unescape): delete the status unescape -> adversarial value comes back MANGLED ---
+MUN="$WORK/mut_unescape"; mkdir -p "$MUN"
+sed '/#STATUS_UNESCAPE/d' "$LIB" > "$MUN/common.sh"
+if ! cmp -s "$LIB" "$MUN/common.sh"; then ok "T15 unescape mutant differs (#STATUS_UNESCAPE line deleted)"; else bad "T15 unescape mutant" "sed no-op — vacuous"; fi
+un_real=$(sread_fb "$P15" advx state "$LIB")
+un_mut=$(sread_fb "$P15" advx state "$MUN/common.sh")
+if [ "$un_real" = "$ADV15" ] && [ "$un_mut" != "$ADV15" ]; then ok "T15 unescape sentinel: real round-trips a\"b\\c, un-unescaped mutant returns MANGLED [$un_mut] -> unescape load-bearing"; else bad "T15 unescape sentinel" "real=[$un_real] mut=[$un_mut] (mutant must differ)"; fi
 echo ""
 
 # ===========================================================================

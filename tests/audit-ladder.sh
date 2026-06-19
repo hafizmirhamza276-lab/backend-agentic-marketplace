@@ -100,7 +100,7 @@ echo ""
 # TIER 1 — SILENT on the real (clean) repo.
 # ===========================================================================
 echo "-- tier 1: SILENT on clean repo --"
-for fn in audit_d1 audit_d2 audit_d3 audit_d4 audit_d5 audit_d6 audit_d6b audit_d7 audit_d8 audit_d9 audit_d10; do
+for fn in audit_d1 audit_d2 audit_d3 audit_d4 audit_d5 audit_d6 audit_d6b audit_d7 audit_d8 audit_d9 audit_d10 audit_d11; do
   out=$(run_det "$fn" "$ROOT")
   n=$(printf '%s\n' "$out" | grep -cE "^(HIGH|MEDIUM|LOW)$TAB" 2>/dev/null || true)
   assert_eq "T1 $fn silent on clean repo (0 findings)" 0 "$n"
@@ -188,6 +188,25 @@ out=$(run_det audit_d10 "$F"); n=$(cnt "$out" HIGH d10-bash-bypass); assert_eq "
 F2="$WORK/d10nb"; mkdir -p "$F2/plugins/q/scripts"
 write_pre "$F2/plugins/q" "Write|Edit|MultiEdit|NotebookEdit" "lint-feedback.sh" 1
 out=$(run_det audit_d10 "$F2"); n=$(cnt "$out" HIGH d10-bash-bypass); assert_eq "T2 D10 silent on a non-write-discipline plugin (not judged)" 0 "$n"
+# D10 (HIGH, F-A3) — a Bash matcher is wired, but the guard-bash-write.sh it points at is HOLLOWED OUT
+# (no interpreter inline-eval DENY, no expanded verbs) -> Pass-2 content check FIRES.
+write_pre_with_bash "$F/plugins/p" "guard-scope.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nawk "BEGIN{}"\nexit 0\n' > "$F/plugins/p/scripts/guard-bash-write.sh"; chmod +x "$F/plugins/p/scripts/guard-bash-write.sh"
+out=$(run_det audit_d10 "$F"); has "$out" HIGH d10-bash-bypass && ok "T2 D10 fires on a HOLLOWED-OUT guard-bash-write.sh (F-A3 content check)" || bad "T2 D10 hollow" "no HIGH; got: $out"
+# D10 silent — the REAL armed guard copied in (carries the interpreter-deny + expanded verbs).
+cp "$ROOT/plugins/builder/scripts/guard-bash-write.sh" "$F/plugins/p/scripts/guard-bash-write.sh"
+out=$(run_det audit_d10 "$F"); n=$(cnt "$out" HIGH d10-bash-bypass); assert_eq "T2 D10 silent with the real armed guard-bash-write.sh" 0 "$n"
+
+# D11 (HIGH, F-A4) — a plugin script whose ACTUAL `set` directive enables errexit.
+F="$WORK/d11"; mkdir -p "$F/plugins/p/scripts"
+printf '#!/usr/bin/env bash\nset -euo pipefail\necho hi\n' > "$F/plugins/p/scripts/guard.sh"
+out=$(run_det audit_d11 "$F"); has "$out" HIGH d11-errexit && ok "T2 D11 fires HIGH on 'set -euo pipefail'" || bad "T2 D11" "no HIGH; got: $out"
+# D11 silent — `set -uo pipefail` (the convention; no errexit).
+printf '#!/usr/bin/env bash\nset -uo pipefail\necho hi\n' > "$F/plugins/p/scripts/guard.sh"
+out=$(run_det audit_d11 "$F"); n=$(cnt "$out" HIGH d11-errexit); assert_eq "T2 D11 silent on 'set -uo pipefail'" 0 "$n"
+# D11 silent — a COMMENT that merely mentions "set -e" must NOT fire (the repo has many such comments).
+printf '#!/usr/bin/env bash\nset -uo pipefail\n# NOT errexit: we deliberately avoid set -e here\necho hi\n' > "$F/plugins/p/scripts/guard.sh"
+out=$(run_det audit_d11 "$F"); n=$(cnt "$out" HIGH d11-errexit); assert_eq "T2 D11 silent on a COMMENT mentioning 'set -e'" 0 "$n"
 
 # D3 (MEDIUM) — matcher omits NotebookEdit.
 F="$WORK/d3"; mkdir -p "$F/plugins/p/scripts"
@@ -229,14 +248,28 @@ out=$(run_det audit_d6b "$F"); n=$(cnt "$out" MEDIUM d6b-hook-no-timeout); asser
 GF="$WORK/d9git"
 if git -C "$WORK" init -q d9git >/dev/null 2>&1; then
   git -C "$GF" config core.autocrlf false; git -C "$GF" config core.fileMode false
-  mkdir -p "$GF/plugins/p/scripts"
+  mkdir -p "$GF/plugins/p/scripts" "$GF/plugins/p/hooks"
   printf '#!/usr/bin/env bash\r\necho crlf\r\n' > "$GF/plugins/p/scripts/crlf.sh"
   printf '#!/usr/bin/env bash\necho lf\n'       > "$GF/plugins/p/scripts/plain.sh"
+  printf '#!/usr/bin/env node\r\nconsole.log(1)\r\n' > "$GF/plugins/p/hooks/crlf.js"    # F-B4: a CRLF .js
+  printf '#!/usr/bin/env node\nconsole.log(1)\n'     > "$GF/plugins/p/hooks/clean.js"   # F-B4: a clean LF .js
   git -C "$GF" add -A >/dev/null 2>&1
   git -C "$GF" -c user.email=t@e -c user.name=t commit -qm f >/dev/null 2>&1 || true
   out=$(run_det audit_d9 "$GF")
   has "$out" LOW d9-line-endings && ok "T2 D9 fires LOW on CRLF-shipped .sh" || bad "T2 D9 crlf" "no LOW; got: $out"
   has "$out" LOW d9-exec-mode && ok "T2 D9 fires LOW on non-hook .sh not 100755" || bad "T2 D9 mode" "no LOW; got: $out"
+  # F-B4: D9 now scans .js too — the CRLF .js fires, the clean LF .js stays silent.
+  printf '%s\n' "$out" | grep d9-line-endings | grep -q 'crlf.js'  && ok "T2 D9 fires LOW on a CRLF-shipped .js (F-B4)" || bad "T2 D9 js crlf" "no .js line-endings finding; got: $out"
+  printf '%s\n' "$out" | grep d9-line-endings | grep -q 'clean.js' && bad "T2 D9 js clean" "clean LF .js wrongly flagged" || ok "T2 D9 SILENT on a clean LF .js (F-B4)"
+  # F-B4 sentinel: drop .js from the find (#D9_FIND_RE) -> the CRLF .js PASSES the mutant while the real
+  # detector FIRES -> the broadened .js scan is load-bearing.
+  MUT9="$WORK/mut-d9find.sh"
+  sed "/#D9_FIND_RE/ s/ -o -name ['][*][.]js[']//" "$CHECKS" > "$MUT9"
+  if ! cmp -s "$CHECKS" "$MUT9"; then ok "T2 D9 .js sentinel mutant differs (.js dropped from the find)"; else bad "T2 D9 .js sentinel mutant" "sed no-op — vacuous"; fi
+  mutout=$(AUDIT_ROOT="$GF" bash -c '. "$LIB"; . "'"$MUT9"'"; audit_d9' 2>/dev/null || true)
+  real_js=no; printf '%s\n' "$out"    | grep d9-line-endings | grep -q 'crlf.js' && real_js=yes
+  mut_js=no;  printf '%s\n' "$mutout" | grep d9-line-endings | grep -q 'crlf.js' && mut_js=yes
+  if [ "$real_js" = yes ] && [ "$mut_js" = no ]; then ok "T2 D9 .js sentinel: real fires on the CRLF .js, .sh-only mutant misses it -> .js scan load-bearing"; else bad "T2 D9 .js sentinel" "real_js=$real_js mut_js=$mut_js (want yes/no)"; fi
 else
   skipnote "T2 D9 (could not git-init a fixture)"
 fi
@@ -278,15 +311,17 @@ git -C "$WORK" init -q g4 >/dev/null 2>&1 || true
 G4="$WORK/g4"
 git -C "$G4" -c user.email=t@e -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1 || true
 G4HEAD=$(git -C "$G4" rev-parse HEAD 2>/dev/null || printf 'x')
-relready() {  # <dir> : make a release-ready fixture (fresh mem, builder done, changelog)
+relready() {  # <dir> : make a release-ready fixture (fresh mem, builder done + tree-stamped, changelog).
+  # Stamp builder tree= (F-A2): the release gate's tree_stale is now FAIL-CLOSED, so a builder STATUS
+  # with no recorded tree reads STALE and would wrongly block the PASS fixture.
   mkdir -p "$1/.claude/explorer" "$1/.claude/builder"
   { printf 'explored_commit: %s\n' "$G4HEAD"; printf 'coverage: 80%%\n'; } > "$1/.claude/explorer/MEMORY.md"
   printf '# c\n' > "$1/.claude/builder/CHANGELOG.md"
-  CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+  CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write builder qa done "" tree="$(bd_tree_digest)"' >/dev/null 2>&1 || true
 }
-# (a) auditor high=0 -> gate PASS even under enforce
+# (a) auditor high=0 -> gate PASS even under enforce (auditor tree-stamped so it isn't falsely stale).
 PA="$G4/relpass"; relready "$PA"
-CLAUDE_PROJECT_DIR="$PA" bash -c '. "$LIB"; bd_status_write auditor audit done "" high=0 med=1 low=2' >/dev/null 2>&1 || true
+CLAUDE_PROJECT_DIR="$PA" bash -c '. "$LIB"; bd_status_write auditor audit done "" high=0 med=1 low=2 tree="$(bd_tree_digest)"' >/dev/null 2>&1 || true
 rc=0; CLAUDE_PROJECT_DIR="$PA" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
 assert_eq "T4 release PASS (exit 0) with auditor high=0 under enforce" 0 "$rc"
 grep -q "0 high" "$PA/.claude/pipeline/RELEASE.md" 2>/dev/null && ok "T4 RELEASE.md shows auditor 0 high PASS" || bad "T4 auditor pass row" "missing"
@@ -341,12 +376,14 @@ echo ""
 echo "-- tier 7: MUTATION SENTINELS --"
 MUT="$WORK/mut-checks.sh"
 # Neuter D2 (broadened non-comment-assignment check -> never fires), D8 (force diff -q success),
-# D10 (invert the bash-matcher test), and D1 (revert the broadened `command -v python<N>` to the
-# literal `python3`). One MUT carries every sentinel mutation.
+# D10 (invert the bash-matcher test), D1 (revert the broadened `command -v python<N>` to the literal
+# `python3`), and D11 (revert the errexit e-match so `set -euo` no longer matches). One MUT carries
+# every sentinel mutation.
 sed -e '/#D2_NORM_RE/ s#! grep -Eq [^;]*2>/dev/null#false#' \
     -e '/#D1_CMDV_RE/ s/python\[0-9\]\*/python3/' \
     -e 's#diff -q "\$canon" "\$f" >/dev/null 2>&1 || #true || #' \
     -e '/#D10_BYPASS_RE/ s#!(p in bash)#(p in bash)#' \
+    -e '/#D11_ERREXIT_RE/ s/-\[a-z\]\*e/-[a-z]*Q/' \
     "$CHECKS" > "$MUT"
 # D2 sentinel — a COMMENT-ONLY bd_normalize_path mention (the F-E evasion): the REAL broadened
 # detector catches it; the neutered mutant must miss it.
@@ -373,6 +410,25 @@ mkdir -p "$WORK/mut10/plugins/p/scripts"; write_pre "$WORK/mut10/plugins/p" "Wri
 realD10=$(run_det audit_d10 "$WORK/mut10")
 mutD10=$(AUDIT_ROOT="$WORK/mut10" CHECKS="$MUT" bash -c '. "$LIB"; . "$MUT"; audit_d10' 2>/dev/null || true)
 if has "$realD10" HIGH d10-bash-bypass && ! has "$mutD10" HIGH d10-bash-bypass; then ok "T7 D10 sentinel: real fires, mutant silent -> bash-matcher check load-bearing"; else bad "T7 D10 sentinel" "real=[$realD10] mut=[$mutD10]"; fi
+# D11 sentinel — revert the errexit e-match (-[a-z]*e -> -[a-z]*Q): a `set -euo pipefail` script the
+# REAL detector catches must be MISSED by the mutant.
+mkdir -p "$WORK/mut11/plugins/p/scripts"
+printf '#!/usr/bin/env bash\nset -euo pipefail\necho hi\n' > "$WORK/mut11/plugins/p/scripts/guard.sh"
+realD11=$(run_det audit_d11 "$WORK/mut11")
+mutD11=$(AUDIT_ROOT="$WORK/mut11" CHECKS="$MUT" bash -c '. "$LIB"; . "$MUT"; audit_d11' 2>/dev/null || true)
+if has "$realD11" HIGH d11-errexit && ! has "$mutD11" HIGH d11-errexit; then ok "T7 D11 sentinel: real fires on 'set -euo', mutant (neutered e-match) silent -> errexit match load-bearing"; else bad "T7 D11 sentinel" "real=[$realD11] mut=[$mutD11]"; fi
+# D10 hollow-guard sentinel (F-A3): neuter Pass-2's content check (#D10_HOLLOW_RE armed-check -> always
+# true) in a DEDICATED mutant — Pass 1 left intact so a Bash-matcher fixture doesn't false-fire — and
+# prove a HOLLOW guard fires the real detector but PASSES the mutant -> the content check is load-bearing.
+MUT10H="$WORK/mut-d10hollow.sh"
+sed '/#D10_HOLLOW_RE/ s/\[ "\$armed" = 1 \]/[ 1 = 1 ]/' "$CHECKS" > "$MUT10H"
+mkdir -p "$WORK/mut10h/plugins/p/scripts"
+write_pre_with_bash "$WORK/mut10h/plugins/p" "guard-scope.sh"
+printf '#!/usr/bin/env bash\nawk "BEGIN{}"\n' > "$WORK/mut10h/plugins/p/scripts/guard-bash-write.sh"
+if ! cmp -s "$CHECKS" "$MUT10H"; then ok "T7 D10 hollow mutant differs (#D10_HOLLOW_RE armed-check neutered)"; else bad "T7 D10 hollow mutant" "sed no-op — vacuous"; fi
+realD10h=$(run_det audit_d10 "$WORK/mut10h")
+mutD10h=$(AUDIT_ROOT="$WORK/mut10h" bash -c '. "$LIB"; . "'"$MUT10H"'"; audit_d10' 2>/dev/null || true)
+if has "$realD10h" HIGH d10-bash-bypass && ! has "$mutD10h" HIGH d10-bash-bypass; then ok "T7 D10 hollow-guard sentinel: real fires on hollow guard, content-neutered mutant silent -> Pass-2 content check load-bearing"; else bad "T7 D10 hollow sentinel" "real=[$realD10h] mut=[$mutD10h]"; fi
 echo ""
 
 echo "== auditor ladder summary: $PASS passed, $FAIL failed =="
