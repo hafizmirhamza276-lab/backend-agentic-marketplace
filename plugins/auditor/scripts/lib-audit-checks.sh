@@ -370,6 +370,33 @@ audit_d11() {
 }
 
 # ===========================================================================
+# D12 — sh-shebang + pipefail (HIGH, CodeRabbit/PR#6): a script whose FIRST line is a NON-bash POSIX
+# `sh`/`dash` shebang (#!/usr/bin/env sh, #!/bin/sh, …/dash) that nonetheless enables `pipefail` via a
+# real `set` directive. `pipefail` is a bash/ksh `set -o` option; POSIX sh/dash REJECT it ("set: Illegal
+# option -o pipefail") and ABORT the script BEFORE any work — silently killing the tool/gate when it runs
+# under its OWN shebang (the test harness invokes scripts via `bash …`, which hides the bug, so the seven
+# suites can't catch it; this static check is the durable guard). FIRES only when BOTH hold: the shebang
+# is sh/dash (NOT bash/ksh/zsh — pipefail is valid there) AND a real `set …pipefail` DIRECTIVE exists
+# (line-start `set`, never a comment or the bare word inside a string — the test ladders MENTION
+# "pipefail" in DATA and MUST stay silent). Scans the harness-invoked tooling + plugin + test scripts.
+# ===========================================================================
+audit_d12() {
+  local root rel f sb; root="$(_audit_root)"
+  for f in "$root"/plugins/*/scripts/*.sh "$root"/scripts/*.sh "$root"/tests/*.sh; do
+    [ -f "$f" ] || continue
+    sb="$(sed -n '1p' "$f" 2>/dev/null)"
+    case "$sb" in '#!'*) : ;; *) continue ;; esac                                   # first line must be a shebang
+    printf '%s' "$sb" | grep -Eq '[/ ](sh|dash)[[:space:]]*$' || continue           #D12_SHEBANG_RE interpreter = sh|dash, NOT bash/ksh/zsh
+    rel="$(_audit_rel "$root" "$f")"
+    # First real `set …pipefail` DIRECTIVE line only (one finding per file). `^[[:space:]]*set[[:space:]]`
+    # excludes a comment ('# …') and a quoted mention ('printf "…pipefail"'), so test DATA stays silent.
+    awk '/^[[:space:]]*set[[:space:]].*pipefail/ {print FNR; exit} #D12_PIPEFAIL_RE' "$f" 2>/dev/null | while IFS= read -r n; do
+      _audit_emit HIGH d12-sh-pipefail "$rel:$n" "POSIX 'sh'/'dash' shebang ($sb) with a 'set …pipefail' directive — pipefail is a bash/ksh option that POSIX sh/dash REJECT (set: Illegal option -o pipefail), aborting the script under its own shebang BEFORE any work (the harness hides this by running via bash). Drop pipefail (use 'set -u') or switch the shebang to bash."
+    done
+  done
+}
+
+# ===========================================================================
 # ADVISORY — informational only. NEVER gates and is EXCLUDED from the high/med/low tally by
 # verify-audit.sh. These are the "fuzzy" findings whose static signal is weak enough that
 # gating on them would risk false-blocking: doc drift (F5), redundant agent tools (F12),
@@ -427,7 +454,7 @@ audit_shellcheck() {
 # Run every detector. Order is HIGH-class first for readable streaming output; verify-audit.sh
 # re-tallies by severity regardless of order.
 audit_run_all() {
-  audit_d1; audit_d2; audit_d6; audit_d7; audit_d8; audit_d10; audit_d11   # HIGH class
+  audit_d1; audit_d2; audit_d6; audit_d7; audit_d8; audit_d10; audit_d11; audit_d12   # HIGH class
   audit_d3; audit_d4; audit_d5; audit_d6b                 # MEDIUM class
   audit_d9                                                # LOW class
   audit_advisory; audit_shellcheck                        # ADVISORY + lint

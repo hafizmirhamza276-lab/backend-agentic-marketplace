@@ -8,7 +8,10 @@
 # NOT errexit (F-A4): `-e` is dropped so a stray non-zero can't abort the scan; abort-on-real-failure
 # is preserved EXPLICITLY — a missing/divergent copy sets rc=1 (the diff step below is already fully
 # if/else-guarded) and the final `exit "$rc"` fails the gate, so removing `-e` never lets drift pass.
-set -uo pipefail
+# `pipefail` is also DROPPED: it is a bash/ksh `set -o` option that POSIX sh/dash REJECT ("set: Illegal
+# option -o pipefail") under this `#!/usr/bin/env sh` shebang — it would abort the gate before any work.
+# No pipe here relies on it. Keep ONLY `-u` (nounset is POSIX-safe).
+set -u
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(dirname "$SCRIPT_DIR")

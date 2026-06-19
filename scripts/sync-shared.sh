@@ -10,9 +10,11 @@
 # `*.sh text eol=lf`) and `cp` preserves the bytes, so each vendored copy is LF
 # too. Idempotent — running it twice is a no-op on disk. Prints what it copied.
 # NOT errexit (F-A4): `-e` is dropped so a stray non-zero can't abort mid-sync; the critical copy is
-# guarded explicitly below, so removing `-e` never lets a FAILED copy pass silently (the gate would
-# then read drift as in-sync). `-u`/`pipefail` are kept.
-set -uo pipefail
+# guarded explicitly below (the `|| { … exit 1; }` lines), so removing `-e` never lets a FAILED copy
+# pass silently. `pipefail` is also DROPPED: it is a bash/ksh `set -o` option that POSIX sh/dash REJECT
+# ("set: Illegal option -o pipefail") under this `#!/usr/bin/env sh` shebang — it would abort the tool
+# before any work. No pipe here relies on it. Keep ONLY `-u` (nounset is POSIX-safe).
+set -u
 
 # Resolve the repo root from THIS script's own location (robust to the caller's
 # working directory): scripts/ lives directly under the repo root.

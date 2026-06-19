@@ -100,7 +100,7 @@ echo ""
 # TIER 1 — SILENT on the real (clean) repo.
 # ===========================================================================
 echo "-- tier 1: SILENT on clean repo --"
-for fn in audit_d1 audit_d2 audit_d3 audit_d4 audit_d5 audit_d6 audit_d6b audit_d7 audit_d8 audit_d9 audit_d10 audit_d11; do
+for fn in audit_d1 audit_d2 audit_d3 audit_d4 audit_d5 audit_d6 audit_d6b audit_d7 audit_d8 audit_d9 audit_d10 audit_d11 audit_d12; do
   out=$(run_det "$fn" "$ROOT")
   n=$(printf '%s\n' "$out" | grep -cE "^(HIGH|MEDIUM|LOW)$TAB" 2>/dev/null || true)
   assert_eq "T1 $fn silent on clean repo (0 findings)" 0 "$n"
@@ -207,6 +207,25 @@ out=$(run_det audit_d11 "$F"); n=$(cnt "$out" HIGH d11-errexit); assert_eq "T2 D
 # D11 silent — a COMMENT that merely mentions "set -e" must NOT fire (the repo has many such comments).
 printf '#!/usr/bin/env bash\nset -uo pipefail\n# NOT errexit: we deliberately avoid set -e here\necho hi\n' > "$F/plugins/p/scripts/guard.sh"
 out=$(run_det audit_d11 "$F"); n=$(cnt "$out" HIGH d11-errexit); assert_eq "T2 D11 silent on a COMMENT mentioning 'set -e'" 0 "$n"
+
+# D12 (HIGH, CodeRabbit/PR#6) — a POSIX sh-shebang script with a real `set …pipefail` directive (dash
+# REJECTS pipefail -> the tool aborts under its own shebang; the bash-invoking harness hides it).
+F="$WORK/d12"; mkdir -p "$F/scripts"
+printf '#!/usr/bin/env sh\nset -o pipefail\necho x\n' > "$F/scripts/tool.sh"
+out=$(run_det audit_d12 "$F"); has "$out" HIGH d12-sh-pipefail && ok "T2 D12 fires HIGH on sh-shebang + 'set -o pipefail'" || bad "T2 D12" "no HIGH; got: $out"
+# D12 also fires on the EXACT PR#6 regression shape: sh + 'set -uo pipefail'.
+printf '#!/usr/bin/env sh\nset -uo pipefail\necho x\n' > "$F/scripts/tool.sh"
+out=$(run_det audit_d12 "$F"); has "$out" HIGH d12-sh-pipefail && ok "T2 D12 fires on sh + 'set -uo pipefail' (the PR#6 regression shape)" || bad "T2 D12 -uo" "no HIGH; got: $out"
+# D12 silent — a BASH shebang (pipefail is valid under bash).
+printf '#!/usr/bin/env bash\nset -uo pipefail\necho x\n' > "$F/scripts/tool.sh"
+out=$(run_det audit_d12 "$F"); n=$(cnt "$out" HIGH d12-sh-pipefail); assert_eq "T2 D12 silent on bash + 'set -uo pipefail'" 0 "$n"
+# D12 silent — the FIXED form: sh + 'set -u' (no pipefail).
+printf '#!/usr/bin/env sh\nset -u\necho x\n' > "$F/scripts/tool.sh"
+out=$(run_det audit_d12 "$F"); n=$(cnt "$out" HIGH d12-sh-pipefail); assert_eq "T2 D12 silent on sh + 'set -u' (the fixed form)" 0 "$n"
+# D12 silent — sh shebang that merely MENTIONS pipefail in a comment + a quoted string (mirrors the real
+# test ladders, which carry "pipefail" in DATA only, never as a `set` directive).
+printf '#!/usr/bin/env sh\nset -eu\n# we avoid set -o pipefail on purpose\nprintf "set -o pipefail\\n"\n' > "$F/scripts/tool.sh"
+out=$(run_det audit_d12 "$F"); n=$(cnt "$out" HIGH d12-sh-pipefail); assert_eq "T2 D12 silent on sh + 'pipefail' only in a comment/string (test-data shape)" 0 "$n"
 
 # D3 (MEDIUM) — matcher omits NotebookEdit.
 F="$WORK/d3"; mkdir -p "$F/plugins/p/scripts"
@@ -374,16 +393,22 @@ echo ""
 # TIER 7 — MUTATION SENTINELS: prove the load-bearing lines are load-bearing.
 # ===========================================================================
 echo "-- tier 7: MUTATION SENTINELS --"
-MUT="$WORK/mut-checks.sh"
+# EXPORT so the mutant lib is visible inside the `CHECKS=$MUT bash -c '… . "$MUT" …'` subshells below —
+# without it $MUT is empty in the child, `. "$MUT"` sources nothing, the mutated detector is undefined,
+# and the "real-fires/mutant-silent" sentinels would pass VACUOUSLY (empty output trivially has no
+# finding). Exporting makes every Tier-7 sentinel actually load and exercise its mutation.
+MUT="$WORK/mut-checks.sh"; export MUT
 # Neuter D2 (broadened non-comment-assignment check -> never fires), D8 (force diff -q success),
 # D10 (invert the bash-matcher test), D1 (revert the broadened `command -v python<N>` to the literal
-# `python3`), and D11 (revert the errexit e-match so `set -euo` no longer matches). One MUT carries
-# every sentinel mutation.
+# `python3`), D11 (revert the errexit e-match so `set -euo` no longer matches), and D12 (widen the
+# shebang-is-sh guard to also accept bash, so a valid bash+pipefail control wrongly fires). One MUT
+# carries every sentinel mutation.
 sed -e '/#D2_NORM_RE/ s#! grep -Eq [^;]*2>/dev/null#false#' \
     -e '/#D1_CMDV_RE/ s/python\[0-9\]\*/python3/' \
     -e 's#diff -q "\$canon" "\$f" >/dev/null 2>&1 || #true || #' \
     -e '/#D10_BYPASS_RE/ s#!(p in bash)#(p in bash)#' \
     -e '/#D11_ERREXIT_RE/ s/-\[a-z\]\*e/-[a-z]*Q/' \
+    -e '/#D12_SHEBANG_RE/ s/(sh|dash)/(sh|dash|bash)/' \
     "$CHECKS" > "$MUT"
 # D2 sentinel — a COMMENT-ONLY bd_normalize_path mention (the F-E evasion): the REAL broadened
 # detector catches it; the neutered mutant must miss it.
@@ -429,6 +454,15 @@ if ! cmp -s "$CHECKS" "$MUT10H"; then ok "T7 D10 hollow mutant differs (#D10_HOL
 realD10h=$(run_det audit_d10 "$WORK/mut10h")
 mutD10h=$(AUDIT_ROOT="$WORK/mut10h" bash -c '. "$LIB"; . "'"$MUT10H"'"; audit_d10' 2>/dev/null || true)
 if has "$realD10h" HIGH d10-bash-bypass && ! has "$mutD10h" HIGH d10-bash-bypass; then ok "T7 D10 hollow-guard sentinel: real fires on hollow guard, content-neutered mutant silent -> Pass-2 content check load-bearing"; else bad "T7 D10 hollow sentinel" "real=[$realD10h] mut=[$mutD10h]"; fi
+# D12 sentinel — widen the shebang-is-sh guard (#D12_SHEBANG_RE (sh|dash) -> (sh|dash|bash)): a BASH
+# script with 'set -uo pipefail' (which the REAL detector keeps SILENT — pipefail is valid under bash)
+# WRONGLY fires the mutant, proving the shebang-is-sh half is load-bearing (the inverse-direction
+# sentinel: real SILENT, mutant FIRES). This guards against D12 false-flagging legitimate bash pipefail.
+mkdir -p "$WORK/mut12/scripts"
+printf '#!/usr/bin/env bash\nset -uo pipefail\necho x\n' > "$WORK/mut12/scripts/tool.sh"
+realD12=$(run_det audit_d12 "$WORK/mut12")
+mutD12=$(AUDIT_ROOT="$WORK/mut12" CHECKS="$MUT" bash -c '. "$LIB"; . "$MUT"; audit_d12' 2>/dev/null || true)
+if ! has "$realD12" HIGH d12-sh-pipefail && has "$mutD12" HIGH d12-sh-pipefail; then ok "T7 D12 sentinel: real SILENT on bash+pipefail, shebang-neutered mutant FIRES -> shebang-is-sh guard load-bearing"; else bad "T7 D12 sentinel" "real=[$realD12] mut=[$mutD12]"; fi
 echo ""
 
 echo "== auditor ladder summary: $PASS passed, $FAIL failed =="
