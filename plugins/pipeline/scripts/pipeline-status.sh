@@ -84,6 +84,9 @@ row_gate auditor  high
 row_gate reviewer blocking
 row_gate ops      blocking
 row pipeline "-"
+# minimalist is an always-on plugin that writes STATUS (set-mode.sh) but was invisible here (F-B3).
+# Surface its current intensity mode (off|lite|full|ultra) in the freshness column; "not run" if unset.
+row minimalist "$(bd_status_read minimalist mode 2>/dev/null || true)"   #DASH_MINIMALIST
 
 # A one-line nudge so a fresh session knows the entry points (SessionStart context).
 if [ ! -f "$(bd_explorer_dir)/MEMORY.md" ]; then

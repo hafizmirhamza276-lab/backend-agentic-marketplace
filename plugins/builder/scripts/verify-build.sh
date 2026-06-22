@@ -14,7 +14,9 @@
 # verified (~half pointed at wrong sub-folders). This gate fails if any
 # index.json file path does not resolve on disk — exactly the class of error a
 # deterministic check catches.
-set -euo pipefail
+# NOT errexit (F-A4): under `set -e` an unexpected non-zero would abort this Stop gate before it can
+# shape its verdict (advisory by default); a single failing probe must shape the verdict, not crash it.
+set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$DIR/../lib/common.sh"

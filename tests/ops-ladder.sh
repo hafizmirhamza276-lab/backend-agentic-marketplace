@@ -165,7 +165,9 @@ if [ "$HAVE_GIT" = yes ]; then
     mkdir -p "$1/.claude/explorer" "$1/.claude/builder"
     { printf 'explored_commit: %s\n' "$G4HEAD"; printf 'coverage: 80%%\n'; } > "$1/.claude/explorer/MEMORY.md"
     printf '# c\n' > "$1/.claude/builder/CHANGELOG.md"
-    CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write builder qa done' >/dev/null 2>&1 || true
+    # Stamp builder tree= (F-A2): the release gate's tree_stale is now FAIL-CLOSED, so a builder STATUS
+    # with no recorded tree reads STALE and would wrongly block the PASS fixtures below.
+    CLAUDE_PROJECT_DIR="$1" bash -c '. "$LIB"; bd_status_write builder qa done "" tree="$(bd_tree_digest)"' >/dev/null 2>&1 || true
   }
   # (a) ops blocking=1 -> gate BLOCKS (exit 2), reason mentions ops.
   PA="$G4/relblock"; relready "$PA"
@@ -175,7 +177,7 @@ if [ "$HAVE_GIT" = yes ]; then
   grep -qi "ops:.*BLOCKING" "$PA/.claude/pipeline/RELEASE.md" 2>/dev/null && ok "T4 RELEASE.md reason mentions ops BLOCKING" || bad "T4 ops reason" "missing"
   # (b) ops blocking=0 -> that check PASSES (gate exit 0; reviewer/auditor absent -> SKIP).
   PB="$G4/relpass"; relready "$PB"
-  CLAUDE_PROJECT_DIR="$PB" bash -c '. "$LIB"; bd_status_write ops readiness done "" blocking=0 concern=2' >/dev/null 2>&1 || true
+  CLAUDE_PROJECT_DIR="$PB" bash -c '. "$LIB"; bd_status_write ops readiness done "" blocking=0 concern=2 tree="$(bd_tree_digest)"' >/dev/null 2>&1 || true   # tree-stamped (F-A2): ops must be a fresh PASS
   rc=0; CLAUDE_PROJECT_DIR="$PB" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?
   assert_eq "T4 release PASSES (exit 0) with ops blocking=0 under enforce" 0 "$rc"
   grep -qi "ops .*0 blocking" "$PB/.claude/pipeline/RELEASE.md" 2>/dev/null && ok "T4 RELEASE.md shows ops 0-blocking PASS" || bad "T4 ops pass row" "missing"
@@ -186,7 +188,7 @@ if [ "$HAVE_GIT" = yes ]; then
   assert_eq "T4 release BLOCKS (exit 2) with ops state=failed" 2 "$rc"
   # (d) ALL THREE coexist: ops clean + auditor high=2 + reviewer blocking=1 -> BLOCKS; cite each.
   PD="$G4/reltrio"; relready "$PD"
-  CLAUDE_PROJECT_DIR="$PD" bash -c '. "$LIB"; bd_status_write ops readiness done "" blocking=0 concern=0'        >/dev/null 2>&1 || true
+  CLAUDE_PROJECT_DIR="$PD" bash -c '. "$LIB"; bd_status_write ops readiness done "" blocking=0 concern=0 tree="$(bd_tree_digest)"' >/dev/null 2>&1 || true   # ops clean+fresh (F-A2)
   CLAUDE_PROJECT_DIR="$PD" bash -c '. "$LIB"; bd_status_write reviewer review failed "" blocking=1 concern=0'    >/dev/null 2>&1 || true
   CLAUDE_PROJECT_DIR="$PD" bash -c '. "$LIB"; bd_status_write auditor audit failed "" high=2 med=0 low=0'        >/dev/null 2>&1 || true
   rc=0; CLAUDE_PROJECT_DIR="$PD" PIPELINE_ENFORCE=1 bash "$VERIFY_RELEASE" >/dev/null 2>&1 || rc=$?

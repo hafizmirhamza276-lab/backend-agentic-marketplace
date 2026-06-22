@@ -5,7 +5,9 @@
 #
 # Usage: validate-plan.sh [path-to-PLAN.md]   (defaults to .claude/builder/PLAN.md)
 # Exit 0 = structurally valid; exit 1 = fails (orchestrator must send it back).
-set -euo pipefail
+# NOT errexit (F-A4): under `set -e` an unexpected non-zero (e.g. a grep no-match in a check) would
+# abort mid-validation and mask the real pass/fail verdict; failures are tracked explicitly in `fail`.
+set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$DIR/../lib/common.sh"

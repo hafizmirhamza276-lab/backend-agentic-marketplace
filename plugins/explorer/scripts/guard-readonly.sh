@@ -4,8 +4,10 @@
 # is outside that directory. Exit code 2 blocks the tool call and feeds the reason back
 # to Claude.
 #
-# Fail-open on parse errors (allow), so a malformed event never bricks a session. Flip
-# DEFAULT to "block" below if you prefer fail-closed.
+# FAIL-CLOSED on an unverifiable target (F-B1): a hook payload whose write target cannot be resolved
+# is BLOCKED (exit 2), matching guard-bash-write's conservative stance — an unverifiable write must not
+# slip through. (Previously DEFAULT=allow waved these through: a fail-open, the same hole F-B1 closes
+# in the bash-write guard.)
 #
 # Shared helpers (the working-python resolver and the lexical path normalizer) now come
 # from the vendored lib/common.sh — canonical source is shared/lib/common.sh. We keep
@@ -14,7 +16,7 @@ set -uo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$SELF_DIR/../lib/common.sh"
-DEFAULT="allow"
+DEFAULT="block"   #READONLY_DEFAULT fail-closed (F-B1): an unresolved write target is REFUSED, not allowed
 
 # Read the hook payload; skip when stdin is a terminal so a missing payload can't block (F11).
 if [ -t 0 ]; then event=""; else event="$(cat 2>/dev/null || true)"; fi
@@ -40,7 +42,9 @@ except Exception:
 
 target="$(extract_path)"
 
-# No path resolved -> obey DEFAULT.
+# No path resolved -> obey DEFAULT, now "block" (F-B1): an unverifiable target is refused fail-closed
+# rather than waved through. (A well-formed Write/Edit/NotebookEdit always carries a path, resolved by
+# python/jq/grep above; an empty target means a malformed/opaque payload, exactly what to refuse.)
 if [[ -z "$target" ]]; then
   [[ "$DEFAULT" == "block" ]] && { echo "explorer: could not verify write target; blocking by policy." >&2; exit 2; }
   exit 0

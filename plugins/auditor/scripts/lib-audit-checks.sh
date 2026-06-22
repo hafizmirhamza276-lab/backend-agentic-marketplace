@@ -273,9 +273,11 @@ audit_d8() {
 }
 
 # ===========================================================================
-# D9 — line-endings/exec (LOW, F10): a .sh with CRLF line endings (breaks the '#!' shebang on
-# Linux/macOS), or a NON-hook .sh tracked at a mode other than 100755 (hook scripts' +x is
-# D6's concern — D9 covers the rest of the convention without double-flagging).
+# D9 — line-endings/exec (LOW, F10 / F-B4): a .sh OR .js/.mjs/.cjs with CRLF line endings (breaks the
+# '#!' shebang — #!/usr/bin/env bash AND #!/usr/bin/env node — on Linux/macOS), or a NON-hook script
+# tracked at a mode other than 100755 (hook scripts' +x is D6's concern — D9 covers the rest of the
+# convention without double-flagging). F-B4 added .js/.mjs/.cjs: the minimalist node hooks are the first
+# .js shebang files, so a CRLF re-save would silently break #!/usr/bin/env node on POSIX.
 # ===========================================================================
 audit_d9() {
   local root rel f hooks mode eol; root="$(_audit_root)"
@@ -290,16 +292,16 @@ audit_d9() {
     eol=""
     bd_have git && eol="$(git -C "$root" ls-files --eol -- "$rel" 2>/dev/null | awk '{print $1; exit}')"
     case "$eol" in
-      i/crlf|i/mixed) _audit_emit LOW d9-line-endings "$rel" ".sh ships with CRLF/mixed line endings ($eol) — breaks the '#!' shebang on Linux/macOS (F10); enforce '*.sh eol=lf' in .gitattributes" ;;
+      i/crlf|i/mixed) _audit_emit LOW d9-line-endings "$rel" "script ships with CRLF/mixed line endings ($eol) — breaks the '#!' shebang on Linux/macOS (F10/F-B4); pin 'eol=lf' for this extension in .gitattributes" ;;
     esac
     case "$(printf '\n%s\n' "$hooks")" in *"$(printf '\n%s\n' "$f")"*) : ;; *)
       mode=""
       bd_have git && mode="$(git -C "$root" ls-files -s -- "$rel" 2>/dev/null | awk '{print $1; exit}')"
       if [ -n "$mode" ] && [ "$mode" != "100755" ]; then
-        _audit_emit LOW d9-exec-mode "$rel" "non-hook .sh is tracked mode $mode (not 100755) — inconsistent with the repo's executable-script convention"
+        _audit_emit LOW d9-exec-mode "$rel" "non-hook script is tracked mode $mode (not 100755) — inconsistent with the repo's executable-script convention"
       fi ;;
     esac
-  done < <(find "$root/plugins" "$root/scripts" "$root/shared" "$root/tests" -name '*.sh' 2>/dev/null)
+  done < <(find "$root/plugins" "$root/scripts" "$root/shared" "$root/tests" \( -name '*.sh' -o -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) 2>/dev/null)   #D9_FIND_RE
 }
 
 # ===========================================================================
@@ -310,7 +312,8 @@ audit_d9() {
 # `Bash` matcher wiring a guard-bash-write.sh. Plugins with no write-discipline guard are not judged.
 # ===========================================================================
 audit_d10() {
-  local root rel plug; root="$(_audit_root)"
+  local root rel plug bscript brel armed; root="$(_audit_root)"
+  # Pass 1 (F-A): a write-discipline plugin with NO PreToolUse `Bash` matcher.
   _audit_hook_records | awk -F'\t' '
     $1=="PreToolUse" && $3!="" {
       p=$3; sub(/.*\/plugins\//,"",p); sub(/\/.*/,"",p)        # plugin = the path component after /plugins/
@@ -324,6 +327,72 @@ audit_d10() {
     [ -n "$plug" ] || continue
     rel="plugins/$plug/hooks/hooks.json"
     _audit_emit HIGH d10-bash-bypass "$rel" "PreToolUse write-discipline plugin '$plug' wires guard-scope/guard-readonly/guard-bugfix but has NO PreToolUse 'Bash' matcher — a Bash command (sed -i, >, tee, cp, mv, dd, truncate, install, ln) mutates files straight past the write guard (F-A); add a PreToolUse Bash matcher wiring guard-bash-write.sh"
+  done
+  # Pass 2 (F-A3): a wired guard-bash-write.sh that EXISTS but is HOLLOWED OUT — lacking the interpreter
+  # inline-eval DENY and/or the expanded mutating-verb set, so a BEGIN{}-only stub would satisfy the
+  # mere-matcher check above while doing NOTHING. Token presence is a static proxy for "the threat-model
+  # logic is wired" (the behavioral proof lives in the guard test suite). A MISSING script is D6's
+  # concern, not double-flagged here.
+  _audit_hook_records | awk -F'\t' '$1=="PreToolUse" && $2 ~ /Bash/ && $3 ~ /guard-bash-write\.sh$/{print $3}' \
+    | sort -u | while IFS= read -r bscript; do
+    [ -f "$bscript" ] || continue
+    brel="$(_audit_rel "$root" "$bscript")"
+    armed=1
+    grep -Eq 'python|perl|ruby|node|deno|php|bun' "$bscript" 2>/dev/null || armed=0   # interpreter set
+    grep -Eq '\-\-eval|--execute'                 "$bscript" 2>/dev/null || armed=0   # inline-eval flags
+    grep -Eq 'rmdir|mkdir|chmod|chown'            "$bscript" 2>/dev/null || armed=0   # expanded mutating verbs
+    grep -Eq '\-delete|sponge'                    "$bscript" 2>/dev/null || armed=0   # destructive verbs
+    [ "$armed" = 1 ] || _audit_emit HIGH d10-bash-bypass "$brel" "wired guard-bash-write.sh is HOLLOWED OUT — missing the interpreter inline-eval DENY and/or the expanded mutating-verb set (rm/mkdir/chmod/chown/sponge/find -delete), so a Bash mutation slips past it (F-A3); restore the threat-model logic"   #D10_HOLLOW_RE
+  done
+}
+
+# ===========================================================================
+# D11 — errexit (HIGH, F-A4): a plugin script under plugins/*/scripts/ whose ACTUAL `set` directive
+# enables errexit (set -e / -eu / -euo …). A PreToolUse guard under `set -e` ABORTS on the first
+# unexpected non-zero (a grep no-match, git in a non-repo, a bd_ helper returning 1) with THAT exit
+# code — and PreToolUse BLOCKS only on exit 2, so any other code lets the tool call PROCEED: a silent
+# fail-open. The convention is `set -uo pipefail` (never -e). This matches a REAL directive line
+# (anchored to line-start so it can never confuse a COMMENT that merely mentions "set -e" — the repo
+# has many such comments — for a live directive). Distinct from reviewer R2, which only catches a
+# NEWLY-introduced errexit (HEAD-vs-working diff); D11 is the static catch for a PRE-EXISTING one.
+# ===========================================================================
+audit_d11() {
+  local root rel f; root="$(_audit_root)"
+  for f in "$root"/plugins/*/scripts/*.sh; do
+    [ -f "$f" ] || continue
+    rel="$(_audit_rel "$root" "$f")"
+    # First real `set …-e…` directive line only (one finding per file). The `^[[:space:]]*set`
+    # anchor excludes a comment line (which begins with '#'), so "# … set -e …" never matches.
+    awk '/^[[:space:]]*set[[:space:]]+-[a-z]*e/ {print FNR; exit} #D11_ERREXIT_RE' "$f" 2>/dev/null | while IFS= read -r n; do
+      _audit_emit HIGH d11-errexit "$rel:$n" "plugin script enables errexit (set -e) in its actual 'set' directive — under -e a PreToolUse guard ABORTS on any unexpected non-zero and the tool then PROCEEDS (PreToolUse blocks only on exit 2): a fail-open (F-A4). Use 'set -uo pipefail' and guard real failures explicitly."
+    done
+  done
+}
+
+# ===========================================================================
+# D12 — sh-shebang + pipefail (HIGH, CodeRabbit/PR#6): a script whose FIRST line is a NON-bash POSIX
+# `sh`/`dash` shebang (#!/usr/bin/env sh, #!/bin/sh, …/dash) that nonetheless enables `pipefail` via a
+# real `set` directive. `pipefail` is a bash/ksh `set -o` option; POSIX sh/dash REJECT it ("set: Illegal
+# option -o pipefail") and ABORT the script BEFORE any work — silently killing the tool/gate when it runs
+# under its OWN shebang (the test harness invokes scripts via `bash …`, which hides the bug, so the seven
+# suites can't catch it; this static check is the durable guard). FIRES only when BOTH hold: the shebang
+# is sh/dash (NOT bash/ksh/zsh — pipefail is valid there) AND a real `set …pipefail` DIRECTIVE exists
+# (line-start `set`, never a comment or the bare word inside a string — the test ladders MENTION
+# "pipefail" in DATA and MUST stay silent). Scans the harness-invoked tooling + plugin + test scripts.
+# ===========================================================================
+audit_d12() {
+  local root rel f sb; root="$(_audit_root)"
+  for f in "$root"/plugins/*/scripts/*.sh "$root"/scripts/*.sh "$root"/tests/*.sh; do
+    [ -f "$f" ] || continue
+    sb="$(sed -n '1p' "$f" 2>/dev/null)"
+    case "$sb" in '#!'*) : ;; *) continue ;; esac                                   # first line must be a shebang
+    printf '%s' "$sb" | grep -Eq '[/ ](sh|dash)[[:space:]]*$' || continue           #D12_SHEBANG_RE interpreter = sh|dash, NOT bash/ksh/zsh
+    rel="$(_audit_rel "$root" "$f")"
+    # First real `set …pipefail` DIRECTIVE line only (one finding per file). `^[[:space:]]*set[[:space:]]`
+    # excludes a comment ('# …') and a quoted mention ('printf "…pipefail"'), so test DATA stays silent.
+    awk '/^[[:space:]]*set[[:space:]].*pipefail/ {print FNR; exit} #D12_PIPEFAIL_RE' "$f" 2>/dev/null | while IFS= read -r n; do
+      _audit_emit HIGH d12-sh-pipefail "$rel:$n" "POSIX 'sh'/'dash' shebang ($sb) with a 'set …pipefail' directive — pipefail is a bash/ksh option that POSIX sh/dash REJECT (set: Illegal option -o pipefail), aborting the script under its own shebang BEFORE any work (the harness hides this by running via bash). Drop pipefail (use 'set -u') or switch the shebang to bash."
+    done
   done
 }
 
@@ -371,17 +440,21 @@ audit_shellcheck() {
   fi
   while IFS= read -r f; do
     [ -f "$f" ] || continue
+    # ShellCheck is a SHELL linter — it cannot lint JS (a node-shebang .js trips SC1008/SC1071…), so
+    # skip .js/.mjs/.cjs here. The find predicate is broadened in step with D9 (F-B4) so the two scans
+    # cover the same set, but JS line-endings/mode are D9's concern, NOT shellcheck's.
+    case "$f" in *.js|*.mjs|*.cjs) continue ;; esac
     rel="$(_audit_rel "$root" "$f")"
     tr -d '\r' < "$f" | shellcheck -S error -f gcc -e SC1091 - 2>/dev/null | while IFS= read -r ln; do
       [ -n "$ln" ] && _audit_emit LOW shellcheck "$rel" "shellcheck: ${ln#*: }"
     done
-  done < <(find "$root/plugins" "$root/scripts" "$root/shared" -name '*.sh' 2>/dev/null)
+  done < <(find "$root/plugins" "$root/scripts" "$root/shared" \( -name '*.sh' -o -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) 2>/dev/null)
 }
 
 # Run every detector. Order is HIGH-class first for readable streaming output; verify-audit.sh
 # re-tallies by severity regardless of order.
 audit_run_all() {
-  audit_d1; audit_d2; audit_d6; audit_d7; audit_d8; audit_d10   # HIGH class
+  audit_d1; audit_d2; audit_d6; audit_d7; audit_d8; audit_d10; audit_d11; audit_d12   # HIGH class
   audit_d3; audit_d4; audit_d5; audit_d6b                 # MEDIUM class
   audit_d9                                                # LOW class
   audit_advisory; audit_shellcheck                        # ADVISORY + lint

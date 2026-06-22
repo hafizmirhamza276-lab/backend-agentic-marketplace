@@ -4,3 +4,9 @@
 # Shell scripts MUST be LF — CRLF breaks the shebang (#!/usr/bin/env bash) on Linux/macOS.
 *.sh   text eol=lf
 *.bash text eol=lf
+
+# JS hooks MUST be LF too — CRLF breaks the shebang (#!/usr/bin/env node) on Linux/macOS (F-B4: the
+# minimalist node hooks are the first .js shebang files; a CRLF re-save would silently break them).
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.cjs  text eol=lf

@@ -53,12 +53,17 @@ TREE_DIRTY=""
 if bd_have git && git -C "$PROJECT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   TREE_DIRTY="$(git -C "$PROJECT" status --porcelain -- . ':(exclude).claude' 2>/dev/null || true)"
 fi
-# tree_stale <module> : succeeds (module IS stale) when it recorded a `tree=` that DIFFERS from the
-# current tree. A module that recorded no tree -> no opinion (returns non-zero = not stale), so the
-# check is purely additive: modules that don't stamp a tree behave exactly as before.
+# tree_stale <module> : succeeds (module IS stale) when its recorded `tree=` DIFFERS from the current
+# tree — OR when it recorded NO tree at all (F-A2, FAIL-CLOSED). The old "no record -> not stale" was a
+# no-op: the ONLY writer of tree= was verify-build (builder); verify-audit/review/ops wrote STATUS
+# WITHOUT tree=, so tree_stale ALWAYS passed for them and a post-gate COMMIT (clean tree -> the dirty
+# check at #F_B_DIRTY misses it) shipped on a STALE-but-green aux STATUS that never inspected the new
+# code. Now those gates stamp tree= AND a missing record reads STALE ("re-run"), so a module's green
+# verdict only counts for the exact tree it examined. (Reached only AFTER a module's STATUS exists and
+# its count/state checks passed, so this never fabricates a verdict for a module that did not run.)
 tree_stale() {
   local rec; rec="$(bd_status_read "$1" tree 2>/dev/null || true)"
-  [ -n "$rec" ] || return 1
+  [ -n "$rec" ] || return 0          #F_B_NOREC no recorded tree -> FAIL-CLOSED (stale): the module must re-run
   [ "$rec" = "$TREE_NOW" ] && return 1
   return 0
 }

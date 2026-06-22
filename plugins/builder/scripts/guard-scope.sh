@@ -7,7 +7,9 @@
 #
 # Advisory by default for the "no plan yet" case (warns); becomes a hard block
 # when enforce mode is on (BUILDER_ENFORCE=1 or settings.enforce_gates=true).
-set -euo pipefail
+# NOT errexit (F-A4): under `set -e` a PreToolUse guard that hits an unexpected non-zero aborts with
+# THAT code — and PreToolUse blocks only on exit 2, so the edit would proceed unguarded (fail-open).
+set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$DIR/../lib/common.sh"
